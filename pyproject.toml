@@ -4,7 +4,7 @@ version = "0.0.1"
 description = "Open-source coding agent on deepagents. DeepSeek V4 via Nebius EU primary; Claude Haiku/Sonnet escalation."
 readme = "README.md"
 requires-python = ">=3.11"
-license = { text = "MIT" }
+license = { text = "AGPL-3.0-only" }
 authors = [{ name = "jgarcial" }]
 
 dependencies = [
