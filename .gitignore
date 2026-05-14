@@ -1,0 +1,35 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+
+# uv
+.venv/
+.python-version
+
+# env / secrets
+.env
+.env.local
+*.key
+*.pem
+
+# IDE
+.vscode/
+.idea/
+.DS_Store
+
+# Claude Code local settings
+.claude/settings.local.json
+
+# Eval outputs & traces
+evals/runs/
+traces/
+*.jsonl.log
+
+# Book PDFs (Chip Huyen, AI Engineering) — copyrighted, tracked locally only.
+# indice.md IS committed; the PDFs are not.
+ai_engineering/*.pdf
