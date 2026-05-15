@@ -190,8 +190,66 @@ class RouterChatModel(BaseChatModel):
             "prompt_hash": prompt_hash,
             "prompt_chars": prompt_chars,
             "scan_error": False,
+            # Original values from the input PII — used by the output-side scan
+            # to distinguish a legitimate placeholder restoration from a real
+            # output leak. The model itself only ever sees the redacted form,
+            # so in practice this set is mostly defensive.
+            "input_pii_values": frozenset(ctx.reverse_map.values()),
         }
         return active_messages, meta
+
+    # ------------------------------------------------------------------
+    # Output-side PII scan (2026-05-15 edge-case hardening)
+    # ------------------------------------------------------------------
+
+    def _scan_output(
+        self, text: str, allowed_values: frozenset[str]
+    ) -> tuple[str, list[str]]:
+        """Redact PII detected in *model output*.
+
+        The model only ever sees redacted input, so any IBAN/CLABE/account-
+        shaped string in its output is one of:
+          1. A placeholder token like ``{/IBAN_CODE_1/}`` — never matches a PII
+             pattern (the regex needs a real country code + length), so
+             ignored automatically.
+          2. A value the model hallucinated or recalled from training data —
+             treat as a leak, redact and log.
+          3. (Defensive) An echo of an original PII value that somehow round-
+             tripped — ``allowed_values`` exempts these from the leak count
+             but still redacts them in the output so the user can't read them.
+
+        Returns ``(cleaned_text, leak_types)`` where ``leak_types`` lists
+        entity types of *real* leaks (case 2). Case 3 redacts silently.
+        """
+        result = scan(text)
+        if not result.detected:
+            return text, []
+        leaks: list[str] = []
+        cleaned = text
+        for entity in sorted(result.entities, key=lambda e: e.start, reverse=True):
+            redaction_token = f"[OUTPUT_REDACTED_{entity.entity_type}]"
+            cleaned = cleaned[: entity.start] + redaction_token + cleaned[entity.end :]
+            if entity.value not in allowed_values:
+                leaks.append(entity.entity_type)
+        return cleaned, leaks
+
+    def _apply_output_scan(
+        self, result: ChatResult, allowed_values: frozenset[str]
+    ) -> list[str]:
+        """Mutate every generation's text content in ``result`` and return
+        the aggregated leak-type list (empty when clean).
+        """
+        all_leaks: list[str] = []
+        for gen in result.generations:
+            msg = getattr(gen, "message", None)
+            if msg is None or not isinstance(msg.content, str):
+                continue
+            cleaned, leaks = self._scan_output(msg.content, allowed_values)
+            if leaks or cleaned != msg.content:
+                msg.content = cleaned
+                gen.text = cleaned
+            all_leaks.extend(leaks)
+        return all_leaks
 
     def _scan_error_meta(self, exc: BaseException, user_text: str) -> dict[str, Any]:
         """Trace metadata for a scanner failure — used by fail-closed paths.
@@ -242,11 +300,14 @@ class RouterChatModel(BaseChatModel):
         )
         elapsed_ms = (time.perf_counter() - t0) * 1000
 
+        output_leaks = self._apply_output_scan(result, meta["input_pii_values"])
+
         usage = result.llm_output or {}
         self._write_trace(trace_id, span_id, ts_start, meta,
                           total_latency_ms=round(elapsed_ms, 1),
                           input_tokens=usage.get("input_tokens", 0),
-                          output_tokens=usage.get("output_tokens", 0))
+                          output_tokens=usage.get("output_tokens", 0),
+                          output_leaks=output_leaks)
         return result
 
     # ------------------------------------------------------------------
@@ -273,12 +334,22 @@ class RouterChatModel(BaseChatModel):
 
         import time
         t0 = time.perf_counter()
+        # Streaming output cannot be rewritten after the fact (chunks have
+        # already been forwarded to the user), so the leak detection here is
+        # post-mortem logging only. The trace flags ``output_leaks`` so
+        # operations can investigate; no in-flight mitigation.
+        buffer_parts: list[str] = []
         for chunk in self._tier1._stream(active_messages, stop=stop, run_manager=run_manager, **kwargs):
+            content = getattr(chunk.message, "content", None) if getattr(chunk, "message", None) else None
+            if isinstance(content, str):
+                buffer_parts.append(content)
             yield chunk
         elapsed_ms = (time.perf_counter() - t0) * 1000
 
+        _, output_leaks = self._scan_output("".join(buffer_parts), meta["input_pii_values"])
         self._write_trace(trace_id, span_id, ts_start, meta,
-                          total_latency_ms=round(elapsed_ms, 1))
+                          total_latency_ms=round(elapsed_ms, 1),
+                          output_leaks=output_leaks)
 
     # ------------------------------------------------------------------
     # _agenerate
@@ -309,11 +380,14 @@ class RouterChatModel(BaseChatModel):
         )
         elapsed_ms = (time.perf_counter() - t0) * 1000
 
+        output_leaks = self._apply_output_scan(result, meta["input_pii_values"])
+
         usage = result.llm_output or {}
         self._write_trace(trace_id, span_id, ts_start, meta,
                           total_latency_ms=round(elapsed_ms, 1),
                           input_tokens=usage.get("input_tokens", 0),
-                          output_tokens=usage.get("output_tokens", 0))
+                          output_tokens=usage.get("output_tokens", 0),
+                          output_leaks=output_leaks)
         return result
 
     # ------------------------------------------------------------------
@@ -330,7 +404,9 @@ class RouterChatModel(BaseChatModel):
         total_latency_ms: float = 0.0,
         input_tokens: int = 0,
         output_tokens: int = 0,
+        output_leaks: Optional[list[str]] = None,
     ) -> None:
+        output_leaks = output_leaks or []
         _append_trace({
             "trace_id": trace_id,
             "span_id": span_id,
@@ -357,4 +433,6 @@ class RouterChatModel(BaseChatModel):
             "prompt_chars": meta["prompt_chars"],
             "tool_calls": [],
             "escalation_signal": None,
+            "output_leak": bool(output_leaks),
+            "output_leak_types": output_leaks,
         })

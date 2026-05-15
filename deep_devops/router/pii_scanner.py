@@ -49,6 +49,8 @@ class EntityType:
     CLABE           = "CLABE"            # Mexican bank account standard (18 digits)
     ABA_ROUTING     = "ABA_ROUTING"      # US Fedwire/ACH routing number (9 digits)
     US_BANK_ACCOUNT = "US_BANK_ACCOUNT"  # US bank account number (variable length)
+    UK_SORT_CODE    = "UK_SORT_CODE"     # UK sort code XX-XX-XX (6 digits, dashes)
+    UK_BANK_ACCOUNT = "UK_BANK_ACCOUNT"  # UK domestic account (8 digits)
     # PII
     EMAIL           = "EMAIL"
     PHONE           = "PHONE"
@@ -80,7 +82,12 @@ def _luhn_check(value: str) -> bool:
     return total % 10 == 0
 
 
-_IBAN_SEPARATOR_RE = re.compile(r"[\s\-]")
+# Separators allowed *inside* an IBAN string. The strict ISO 13616 set is just
+# whitespace/dashes; we widen it to also accept the common adversarial obfuscation
+# chars (`.`, `*`, `_`, `/`, `#`) so that ``CH*12.0070-0113_8912/3412#3`` is still
+# recognised and redacted (real edge case observed 2026-05-15).
+_IBAN_SEP_CHARS = r"\s\-.\*_/#"
+_IBAN_SEPARATOR_RE = re.compile(f"[{_IBAN_SEP_CHARS}]")
 
 # ISO 13616 IBAN registry — official total length per country code.
 # Source: SWIFT IBAN registry (https://www.swift.com/standards/data-standards/iban),
@@ -116,10 +123,8 @@ _IBAN_LENGTHS: dict[str, int] = {
 
 
 def _iban_country_length(value: str) -> bool:
-    """Validate IBAN by country-code + total-length (no mod-97 checksum).
-
-    Redundant given the country-aware regex below, but kept as a defensive
-    invariant so that any future regex relaxation does not silently widen FPs.
+    """Validate IBAN by country-code + total-length (no mod-97 checksum) + BBAN
+    digit-ratio.
 
     Design choice (M1.5, after a real leak with a mod-97-invalid IBAN reaching
     DeepSeek): the bank/corp threat model treats any string of the form
@@ -127,11 +132,22 @@ def _iban_country_length(value: str) -> bool:
     redacts it. Dropping the checksum widens recall; the country whitelist +
     exact length keeps precision high enough that random alphanumerics don't
     trip the detector.
+
+    Edge case (2026-05-15): widening the separator set (``_IBAN_SEP_CHARS``)
+    let prose like ``at 172.32.0.1 is in a public`` match the ``AT`` (Austria,
+    length 20) alternation. Real IBANs are ≥70% digits in the BBAN; prose
+    isn't. The digit-ratio post-filter restores precision without losing
+    obfuscated cases like ``CH*12.0070-0113_8912/3412#3`` (BBAN 17/17 digits).
     """
     s = _IBAN_SEPARATOR_RE.sub("", value).upper()
     if len(s) < 4:
         return False
-    return _IBAN_LENGTHS.get(s[:2]) == len(s)
+    if _IBAN_LENGTHS.get(s[:2]) != len(s):
+        return False
+    bban = s[4:]  # skip CC + check digits (\d{2} already enforced by the regex)
+    if not bban:
+        return False
+    return sum(c.isdigit() for c in bban) / len(bban) >= 0.7
 
 
 def _build_iban_regex() -> re.Pattern:
@@ -140,15 +156,51 @@ def _build_iban_regex() -> re.Pattern:
     Anchoring the BBAN length per country prevents greedy over-extension into
     surrounding text (e.g. the regex stopping at 'ayer' in '...1234567890 ayer'
     because [A-Z0-9] would otherwise keep consuming letters).
+
+    Separator widening vs. strict ISO 13616 (2026-05-15 edge case):
+    separators between any two BBAN chars include whitespace, dashes, dots,
+    asterisks, underscores, slashes and hashes (``_IBAN_SEP_CHARS``). The
+    same set is also allowed between CC and the check digits, so that
+    ``CH*12.0070-0113_8912/3412#3`` is still recognised. Check digits remain
+    strict ``\\d{2}`` — relaxing them to ``[A-Z0-9]`` produced too many false
+    positives in prose (country-code letters embedded in normal text).
+    Homoglyph attacks at check digits (``ES9I…``) are handled by the second
+    pass in ``_homoglyph_iban_candidates``.
     """
+    sep = f"[{_IBAN_SEP_CHARS}]*"
     parts = [
-        f"{cc}\\d{{2}}(?:[\\s\\-]*[A-Z0-9]){{{length - 4}}}"
+        f"{cc}{sep}\\d{sep}\\d(?:{sep}[A-Z0-9]){{{length - 4}}}"
         for cc, length in _IBAN_LENGTHS.items()
     ]
     return re.compile(r"\b(?:" + "|".join(parts) + r")\b", re.IGNORECASE)
 
 
 _IBAN_REGEX = _build_iban_regex()
+
+
+# Homoglyph pass — second IBAN regex where the two check-digit slots accept any
+# alphanumeric. Used only to catch typo/homoglyph attacks like ``ES9I 0182 …``
+# (``I`` mistaken for ``1``). After matching, the candidate is normalised
+# (``I``→``1``, ``O``→``0``, ``l``→``1``) and re-validated via
+# ``_iban_country_length``. To prevent prose false positives the candidate
+# must contain at least one of those homoglyph letters in any position; a
+# letter-free string would already be caught by the strict regex.
+def _build_iban_lenient_regex() -> re.Pattern:
+    sep = f"[{_IBAN_SEP_CHARS}]*"
+    parts = [
+        f"{cc}{sep}[A-Z0-9]{sep}[A-Z0-9](?:{sep}[A-Z0-9]){{{length - 4}}}"
+        for cc, length in _IBAN_LENGTHS.items()
+    ]
+    return re.compile(r"\b(?:" + "|".join(parts) + r")\b", re.IGNORECASE)
+
+
+_IBAN_LENIENT_REGEX = _build_iban_lenient_regex()
+_IBAN_HOMOGLYPH_LETTERS = frozenset("IOilOI")  # I/i, O/o, l (lowercase L)
+_IBAN_HOMOGLYPH_TRANSLATE = str.maketrans({"I": "1", "i": "1", "O": "0", "o": "0", "l": "1"})
+
+
+def _normalize_iban_homoglyphs(s: str) -> str:
+    return s.translate(_IBAN_HOMOGLYPH_TRANSLATE)
 
 
 def _cif_check(value: str) -> bool:
@@ -354,7 +406,7 @@ _PATTERNS: list[_Pattern] = [
     #   - Country-aware length: regex anchors BBAN to the exact length per
     #     country so it doesn't over-extend into surrounding letters.
     #   - Irregular grouping: separators allowed between any two BBAN chars
-    #     ('ES21 1465 0100 92 1234567890' was the leaking case).
+    #     (the M1.5 leak used an ES IBAN with 4+4+2+10 irregular grouping).
     #   - No mod-97: bank/corp threat model treats even checksum-invalid
     #     IBAN-shaped strings as IBAN-intent (typo of a real IBAN).
     _Pattern(
@@ -408,6 +460,41 @@ _PATTERNS: list[_Pattern] = [
             "checking account", "savings account", "account number",
             "account is", "fedwire", "ach", "wire transfer", "wire to",
             "deposit", "routing",
+        }),
+    ),
+
+    # UK sort code — 6 digits in three groups separated by dashes or spaces.
+    # Format: XX-XX-XX (canonical) or XX XX XX. Strong context gate to keep
+    # precision (raw 6-digit triplets like "20-11-22" are also dates/version
+    # numbers in unrelated text).
+    _Pattern(
+        EntityType.UK_SORT_CODE,
+        re.compile(r"\b\d{2}[\s\-]\d{2}[\s\-]\d{2}\b"),
+        "[UK_SORT_CODE]",
+        context_words=frozenset({
+            "sort code", "sortcode", "uk", "lloyds", "barclays", "hsbc",
+            "natwest", "santander uk", "tsb", "monzo", "starling", "metro bank",
+            "bank of scotland", "rbs", "halifax", "nationwide", "co-operative",
+            "account number", "bank details", "local clearing", "bacs",
+            "faster payments", "chaps",
+        }),
+    ),
+
+    # UK domestic account number — exactly 8 digits with strong UK-banking context.
+    # Threat model: pair with UK_SORT_CODE; on its own an 8-digit string is too
+    # generic, so the context gate is mandatory. The `\b\d{9}\b` and
+    # `\b\d{10,17}\b` patterns above don't fire on 8 digits, so this is the only
+    # detector that covers this shape.
+    _Pattern(
+        EntityType.UK_BANK_ACCOUNT,
+        re.compile(r"\b\d{8}\b"),
+        "[UK_BANK_ACCOUNT]",
+        context_words=frozenset({
+            "sort code", "sortcode", "uk entity", "lloyds", "barclays", "hsbc",
+            "natwest", "santander uk", "tsb", "monzo", "starling", "metro bank",
+            "bank of scotland", "rbs", "halifax", "nationwide",
+            "account number", "bank details", "local clearing", "bacs",
+            "faster payments", "chaps", "sterling", "gbp",
         }),
     ),
 
@@ -600,6 +687,26 @@ def scan(text: str) -> ScanResult:
                 start=m.start(),
                 end=m.end(),
                 placeholder=p.placeholder,
+            ))
+
+    # Homoglyph pass for IBANs — catches I/O/l→1/0/1 typo attacks that bypass
+    # the strict ``\d{2}`` check-digit regex. Skipped over spans that the strict
+    # pass already covered so we don't double-redact.
+    iban_spans = [(e.start, e.end) for e in entities if e.entity_type == EntityType.IBAN_CODE]
+    for m in _IBAN_LENIENT_REGEX.finditer(text):
+        s, e = m.start(), m.end()
+        if any(es <= s < ee or es < e <= ee for es, ee in iban_spans):
+            continue
+        value = m.group()
+        if not any(c in _IBAN_HOMOGLYPH_LETTERS for c in value):
+            continue  # plain prose with no homoglyph chars — strict regex would have caught a real IBAN
+        if _iban_country_length(_normalize_iban_homoglyphs(value)):
+            entities.append(DetectedEntity(
+                entity_type=EntityType.IBAN_CODE,
+                value=value,
+                start=s,
+                end=e,
+                placeholder="[IBAN_CODE]",
             ))
 
     entities.sort(key=lambda e: e.start)

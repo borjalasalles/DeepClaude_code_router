@@ -40,10 +40,10 @@ The project is mirrored to GitHub at [`borjalasalles/DeepClaude_code_router`](ht
 | Database URLs with credentials | `postgres://user:pass@host`, `mysql://...`, `redis://...` | `{/DATABASE_URL_1/}` |
 | SWIFT / BIC codes | `CAIXESBBXXX` (only when banking keywords nearby) | `{/SWIFT_CODE_1/}` |
 | Credit / debit cards | `4111 1111 1111 1111`, `4111-1111-1111-1111`, `378282246310005` — Luhn-validated | `{/CREDIT_CARD_1/}` |
-| International IBANs (ISO 13616) | `ES9121000418450200051332`, `GB29 NWBK 6016 1331 9268 19`, `DE89 3704 0044 0532 0130 00`, `CH93 0076 2011 6238 5295 7`, `BR97 0036 0305 0000 1000 9795 493P 1`, … — ~85 countries (EU/EEA, UK, Switzerland, MENA, Latin America). Country-aware regex anchors to each country's exact length; **no mod-97 checksum gate** so typos and fictional IBANs are still redacted (denial-by-default after a real leak). | `{/IBAN_CODE_1/}` |
-| Mexican CLABE | `002115012345678901` (18 digits in Mexican-banking context: `clabe`, `banamex`, `spei`, `méxico`, …) | `{/CLABE_1/}` |
-| US ABA routing | `123456780` (9 digits in US-banking context: `aba`, `routing`, `fedwire`, `ach`, `chase`, …) | `{/ABA_ROUTING_1/}` |
-| US bank account | `440012345678` (10-17 digits in US-banking context: `chase`, `wells fargo`, `checking account`, `wire transfer`, …) | `{/US_BANK_ACCOUNT_1/}` |
+| International IBANs (ISO 13616) | synthetic examples: `ES00 0000 0000 0000 0000 0000`, `GB00 ZZZZ 0000 0000 0000 00`, `DE00 0000 0000 0000 0000 00`, `CH00 0000 0000 0000 0000 0`, `BR00 0000 0000 0000 0000 0000 000Z 0`, … — ~85 countries (EU/EEA, UK, Switzerland, MENA, Latin America). Country-aware regex anchors to each country's exact length; **no mod-97 checksum gate** so typos and fictional IBANs are still redacted (denial-by-default after a real leak). | `{/IBAN_CODE_1/}` |
+| Mexican CLABE | 18-digit synthetic example `000000000000000000` in Mexican-banking context (`clabe`, `banamex`, `spei`, `méxico`, …) | `{/CLABE_1/}` |
+| US ABA routing | 9-digit synthetic example `000000000` in US-banking context (`aba`, `routing`, `fedwire`, `ach`, `chase`, …) | `{/ABA_ROUTING_1/}` |
+| US bank account | 10-17 digit synthetic example `000000000000` in US-banking context (`chase`, `wells fargo`, `checking account`, `wire transfer`, …) | `{/US_BANK_ACCOUNT_1/}` |
 | **PII** | | |
 | Emails | `user@company.com` (RFC 2606 example domains excluded) | `{/EMAIL_1/}` |
 | Phone numbers | `+34 612 345 678`, `612 345 678`, `415-555-1234` | `{/PHONE_1/}` |

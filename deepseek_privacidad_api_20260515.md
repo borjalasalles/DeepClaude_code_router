@@ -262,8 +262,8 @@ Estos tests verifican que el anonimizador **no deja pasar** datos sensibles.
 | ID | Caso de prueba | Input de ejemplo | Resultado esperado |
 |---|---|---|---|
 | QA-A01 | IBAN con espacios | `ES91 2100 0418 4502 0005 1332` | `[IBAN_1]` |
-| QA-A02 | IBAN sin espacios | `ES9121000418450200051332` | `[IBAN_1]` |
-| QA-A03 | IBAN en JSON | `{"cuenta": "ES9121000418450200051332"}` | `{"cuenta": "[IBAN_1]"}` |
+| QA-A02 | IBAN sin espacios | `ES0000000000000000000000` | `[IBAN_1]` |
+| QA-A03 | IBAN en JSON | `{"cuenta": "ES0000000000000000000000"}` | `{"cuenta": "[IBAN_1]"}` |
 | QA-A04 | PAN con guiones | `4539-1488-0343-6467` + validación Luhn | `[PAN_1]` |
 | QA-A05 | PAN en comentario SQL | `-- tarjeta cliente: 4539148803436467` | comentario enmascarado |
 | QA-A06 | API key en variable Python | `api_key = "sk-ab12cd34ef56gh78ij90"` | `api_key = "[API_KEY_1]"` |
@@ -280,7 +280,7 @@ Estos tests verifican que el anonimizador **no deja pasar** datos sensibles.
 | QA-A17 | Datos en stack trace | `at com.banco.clientes.GestorDNI.validar(DNI:12345678Z)` | enmascarado |
 | QA-A18 | Credencial en variable de entorno en código | `os.environ["DB_PASSWORD"] = "prod_pass_2026"` | enmascarado |
 | QA-A19 | Número de tarjeta en XML | `<pan>4539148803436467</pan>` | `<pan>[PAN_1]</pan>` |
-| QA-A20 | Datos de test hardcodeados en unittest | `assert iban == "ES9121000418450200051332"` | enmascarado |
+| QA-A20 | Datos de test hardcodeados en unittest | `assert iban == "ES0000000000000000000000"` | enmascarado |
 | QA-A21 | CIF en factura desestructurada | `NIF: B-12345678, proveedor Empresa S.L.` | `NIF: [CIF_1], proveedor [CLIENTE_CORP_1]` |
 | QA-A22 | Webhook URL con token | `https://hooks.banco.com/trigger/xK9mP2nQrS7vW4` | `[WEBHOOK_URL_1]` |
 | QA-A23 | Hostname interno en URL | `http://api.core.internal/v2/accounts` | `[URL_INTERNA_1]` |

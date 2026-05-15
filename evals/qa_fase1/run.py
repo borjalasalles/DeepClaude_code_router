@@ -86,7 +86,7 @@ def run_suite() -> dict:
 
 def latency_bench() -> dict:
     """QA-F: p99 over a synthetic 10 KB and 100 KB payload."""
-    base = "DNI 12345678Z, IBAN ES9121000418450200051332, email juan@empresa.com. "
+    base = "DNI 12345678Z, IBAN ES0000000000000000000000, email juan@empresa.com. "
     sizes = {
         "10kb": (base * (10_000 // len(base) + 1))[:10_000],
         "100kb": (base * (100_000 // len(base) + 1))[:100_000],
