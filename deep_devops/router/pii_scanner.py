@@ -227,16 +227,21 @@ _PATTERNS: list[_Pattern] = [
     ),
 
     # Credit card: Visa (13/16), Mastercard (16), Amex (15), Diners (14),
-    # Discover (16). Luhn post-filter eliminates virtually all false positives.
+    # Discover (16). Each variant accepts optional space or dash separators between
+    # digit groups (e.g. "4111 1111 1111 1111" and "4111-1111-1111-1111").
+    # Luhn post-filter eliminates virtually all false positives.
+    # FIX B1: Mastercard was [25][0-9]{14} (15 digits) → now 16 digits.
+    # FIX B2: formatted numbers with spaces/dashes now matched.
     _Pattern(
         EntityType.CREDIT_CARD,
         re.compile(
             r"\b(?:"
-            r"4[0-9]{12}(?:[0-9]{3})?"                   # Visa 13 or 16
-            r"|[25][0-9]{14}"                             # Mastercard / Maestro 16
-            r"|3[47][0-9]{13}"                            # Amex 15
-            r"|3(?:0[0-5]|[68][0-9])[0-9]{11}"           # Diners 14
-            r"|6(?:011|5[0-9]{2})[0-9]{12}"              # Discover 16
+            r"4\d{3}[ \-]?\d{4}[ \-]?\d{4}[ \-]?\d{4}"        # Visa 16 (plain or grouped)
+            r"|4\d{12}"                                           # Visa 13
+            r"|[25]\d{3}[ \-]?\d{4}[ \-]?\d{4}[ \-]?\d{4}"     # Mastercard/Maestro 16
+            r"|3[47]\d{2}[ \-]?\d{6}[ \-]?\d{5}"                # Amex 15 (4-6-5)
+            r"|3(?:0[0-5]|[68]\d)\d[ \-]?\d{6}[ \-]?\d{4}"     # Diners 14 (4-6-4)
+            r"|6(?:011|5\d{2})[ \-]?\d{4}[ \-]?\d{4}[ \-]?\d{4}" # Discover 16
             r")\b"
         ),
         "[CREDIT_CARD]",
@@ -283,11 +288,17 @@ _PATTERNS: list[_Pattern] = [
         "[PHONE]",
     ),
 
-    # Password field assignments (label required — raw passwords are undetectable).
+    # Password / secret field assignments.
+    # Covers bash/YAML/env-file (key=value, key: value) and JSON ("key": "value").
+    # Optional surrounding quotes on the key handle JSON object keys.
+    # Optional leading quote on the value handles JSON string values.
+    # FIX B3: added access_key, secret_key, api_key, clave, secret, token.
     _Pattern(
         EntityType.PASSWORD_FIELD,
         re.compile(
-            r"(?:password|contraseña|passwd|pwd|pass)\s*[=:]\s*\S+",
+            r'(?:"?(?:password|contraseña|passwd|pwd|pass'
+            r'|access_key|secret_key|api_key|clave|secret|token)"?)'
+            r'\s*[=:]\s*"?\S+',
             re.IGNORECASE,
         ),
         "[PASSWORD_FIELD]",

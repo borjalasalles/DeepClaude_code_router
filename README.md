@@ -12,29 +12,45 @@ Open-source coding agent built on [`langchain-ai/deepagents`](https://github.com
 
 The project is mirrored to GitHub at [`borjalasalles/DeepClaude_code_router`](https://github.com/borjalasalles/DeepClaude_code_router). That remote is the canonical off-machine **backup** — commit and push regularly so work survives a machine loss or migration between computers.
 
-## PII redaction — what gets anonymised
+## PII redaction — confidentiality guarantee
 
-Before any message reaches DeepSeek, the router scans only what you typed (not the system prompt) and replaces sensitive values with typed placeholders. The session **never blocks** — it just anonymises and continues.
+**Every message you type is scanned before it reaches any LLM.** Sensitive values are replaced with typed, numbered placeholders (`{/EMAIL_1/}`, `{/SECRET_KEY_1/}`, …). The model receives the sanitised text and never sees the original values. The session **never blocks** — it always continues, with or without PII detected.
 
-### What the scanner detects today
+> **Why this matters for Tier 1 (DeepSeek native, China-hosted):** DeepSeek's native API is the cheapest tier, but it is hosted outside the EU. The scanner is the last line of defence before your message crosses that boundary. If the scanner misses something, that value leaves your machine unredacted. That is why false negatives are treated as worse than false positives, and why the [known limitations](#known-limitations--what-the-scanner-cannot-catch) section below is not hidden.
 
-| Category | Examples detected | Placeholder |
+### What the scanner catches
+
+| Category | Examples | Placeholder |
 |---|---|---|
-| Cloud API keys | `AKIA...` (AWS), `sk-ant-...` (Anthropic), `sk-proj-...` (OpenAI) | `{/AWS_ACCESS_KEY_1/}`, `{/SECRET_KEY_1/}` |
-| GitHub tokens | `ghp_...`, `ghs_...`, `github_pat_...` | `{/GITHUB_TOKEN_1/}` |
+| **Cloud / API credentials** | | |
+| AWS access keys | `AKIAIOSFODNN7EXAMPLE` | `{/AWS_ACCESS_KEY_1/}` |
+| Generic secret keys | `sk-ant-api03-...`, `sk-proj-...` (OpenAI, Anthropic, etc.) | `{/SECRET_KEY_1/}` |
+| GitHub tokens | `ghp_...`, `ghs_...`, `ghr_...`, `ghu_...`, `github_pat_...` | `{/GITHUB_TOKEN_1/}` |
 | Stripe keys | `sk_live_...`, `sk_test_...` | `{/STRIPE_KEY_1/}` |
-| Slack tokens | `xoxb-...`, `xoxp-...`, `xapp-...` | `{/SLACK_TOKEN_1/}` |
-| Telegram bot tokens | `123456789:AAF...` | `{/TELEGRAM_TOKEN_1/}` |
-| JWT tokens | `eyJ...` (any three-part base64url) | `{/JWT_TOKEN_1/}` |
+| Slack tokens | `xoxb-...`, `xoxp-...`, `xapp-...`, `xoxr-...` | `{/SLACK_TOKEN_1/}` |
+| Telegram bot tokens | `123456789:AAFabc...` | `{/TELEGRAM_TOKEN_1/}` |
+| GCP API keys | `AIzaSyD...` (Google Cloud) | `{/GCP_API_KEY_1/}` |
+| **Auth tokens** | | |
+| JWT tokens | `eyJ...` — two or three segments, incl. `alg:none` | `{/JWT_TOKEN_1/}` |
 | Bearer tokens | `Authorization: Bearer abc...` | `{/BEARER_TOKEN_1/}` |
 | PEM / private keys | `-----BEGIN RSA PRIVATE KEY-----` | `{/PEM_KEY_1/}` |
-| Database URLs with passwords | `postgres://user:pass@host` | `{/DATABASE_URL_1/}` |
-| **Emails** | `user@company.com` | `{/EMAIL_1/}` |
-| **Phone numbers** | `+34 612 345 678`, `612345678`, `415-555-1234` | `{/PHONE_1/}` |
-| **Password fields** | `password=Abc123`, `contraseña: X`, `pwd=secret` | `{/PASSWORD_FIELD_1/}` |
-| Private IPs | `192.168.x.x`, `10.x.x.x`, `172.16-31.x.x` | `{/PRIVATE_IP_1/}` |
+| **Infra / DB** | | |
+| Database URLs with credentials | `postgres://user:pass@host`, `mysql://...`, `redis://...` | `{/DATABASE_URL_1/}` |
+| SWIFT / BIC codes | `CAIXESBBXXX` (only when banking keywords nearby) | `{/SWIFT_CODE_1/}` |
+| Credit / debit cards | `4111 1111 1111 1111`, `4111-1111-1111-1111`, `378282246310005` — Luhn-validated | `{/CREDIT_CARD_1/}` |
+| Spanish IBANs | `ES9121000418450200051332` — mod-97 validated | `{/IBAN_CODE_1/}` |
+| **PII** | | |
+| Emails | `user@company.com` (RFC 2606 example domains excluded) | `{/EMAIL_1/}` |
+| Phone numbers | `+34 612 345 678`, `612 345 678`, `415-555-1234` | `{/PHONE_1/}` |
+| Password / secret fields | `password=X`, `contraseña: X`, `access_key: X`, `secret=X`, `api_key: X`, `"access_key": "X"` (JSON) | `{/PASSWORD_FIELD_1/}` |
+| Spanish DNI (NIF) | `12345678Z` — mod-23 validated | `{/ES_NIF_1/}` |
+| Spanish NIE | `X1234567L` — mod-23 validated | `{/ES_NIE_1/}` |
+| **Network / infra markers** | | |
+| Private IPs | `192.168.x.x`, `10.x.x.x`, `172.16–31.x.x` | `{/PRIVATE_IP_1/}` |
 | Internal hostnames | `db.internal`, `server.corp`, `host.lan` | `{/INTERNAL_HOST_1/}` |
 | Secret file paths | `.env`, `/secrets/`, `credentials.json`, `*.pem`, `*.key` | `{/SECRET_PATH_1/}` |
+
+Checksum validators (Luhn, mod-97, mod-23) mean the scanner **only flags real-format values** — a random 16-digit string that fails Luhn is not reported as a credit card.
 
 ### Example
 
@@ -50,12 +66,33 @@ hola soy fulanito, me ayudas a acceder a SAP
 mi usuario es {/EMAIL_1/} y mi {/PASSWORD_FIELD_1/}
 ```
 
-### Known limitations (NER — M2 roadmap)
+JSON config example — input:
+```json
+{ "access_key": "SecretPassword2026#", "fiscal_id": "12345678Z" }
+```
 
-The scanner is **fully deterministic (regex-only)** — it cannot detect:
-- **Proper names** ("fulanito", "García López") — requires Named Entity Recognition (NER)
-- **Arbitrary passwords without a label** — `Abc123!` alone is undetectable without context
-- **Short opaque tokens** like `123AXX` — too short and generic to regex safely
+What DeepSeek sees:
+```json
+{ {/PASSWORD_FIELD_1/}, "fiscal_id": {/ES_NIF_1/} }
+```
+
+### Known limitations — what the scanner cannot catch
+
+The scanner is **fully deterministic (regex + checksum)**. It has no semantic understanding. These categories are **not protected** today:
+
+| Gap | Example | Why undetectable | Mitigation |
+|---|---|---|---|
+| Proper names in text | `"mi nombre es Juan García"` | Requires NER — no regex can distinguish names from other words | M2: spaCy `es_core_news_sm` |
+| Passwords without a label | `"la clave es Inicial2026!"` | Arbitrary strings are indistinguishable from normal text | M2: NER context + entropy scoring |
+| Non-standard field names | `"private_info: secret"`, `"x-api-token: abc"` | Scanner knows a fixed list of field names | Add field names to the pattern |
+| Short / opaque tokens | `"code: 123AXX"` | Too short and generic to regex safely without massive FPs | Accept the gap |
+| Sensitive values inside code blocks | Variable names, inline values in long scripts | The scanner runs on the full message text, but code has too many FPs for broad rules | M2: skip NER on code blocks |
+
+**If you handle data that cannot leave the EU under any circumstances, use the kill-switch:**
+```bash
+DEEP_DEVOPS_DISABLE_PUBLIC_TIER=1 deepagents --model deep-devops:router
+```
+This collapses Tier 1 and routes everything to Tier 2 (Nebius, Amsterdam) or Tier 3 (Anthropic). No code change required.
 
 For M2, integrating a lightweight NER model (e.g. spaCy `es_core_news_sm`) would add `NOMBRE_PROPIO`, `APELLIDO`, and `ORGANIZACION` detection without LLM overhead.
 

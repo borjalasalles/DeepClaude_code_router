@@ -74,6 +74,10 @@ uv run eval                      # run eval harness over evals/tasks.jsonl
 uv run skill-factory --dry-run   # offline batch: cluster failures, propose skills
 ```
 
+## Workflow rules (Claude Code behaviour)
+
+- **Never commit or push without being explicitly asked.** The user always tests before committing.
+
 ## Don'ts
 
 - Don't wrap deepagents in LangChain/LlamaIndex orchestration.
