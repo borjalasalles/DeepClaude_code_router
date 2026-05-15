@@ -7,9 +7,14 @@ M1 routing (single tier active):
   - Session never blocks due to PII — redaction is the mitigation.
   - Tier classification is logged for future routing (tier 2/3 wired in M2).
   - System prompt and AI messages are not scanned (trusted/already processed).
+  - Fail-closed: if the scanner itself raises, the request is aborted before any
+    upstream call — the trace records ``scan_error: true`` and the exception is
+    re-raised so the caller (deepagents) surfaces the error instead of sending
+    unscanned text to the model (QA-D05).
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import uuid
@@ -137,7 +142,12 @@ class RouterChatModel(BaseChatModel):
     # ------------------------------------------------------------------
 
     def _route(self, messages: list[BaseMessage]) -> tuple[list[BaseMessage], dict[str, Any]]:
-        """Scan HumanMessages, redact PII, classify intended tier for logging."""
+        """Scan HumanMessages, redact PII, classify intended tier for logging.
+
+        Raises on scanner failure. Callers (``_generate``/``_stream``/``_agenerate``)
+        wrap this in a fail-closed try/except that records a ``scan_error`` trace
+        and aborts the upstream call (QA-D05).
+        """
         user_text = _human_text(messages)
         scan_result = scan(user_text)
         ctx = redact(user_text, scan_result)
@@ -163,15 +173,45 @@ class RouterChatModel(BaseChatModel):
             route = "public"
             classifier_reason = "public_markers_present"
 
+        # Trace-side fingerprints — hash and length are zero-PII summaries
+        # of the *redacted* text, so they never expose original values.
+        redacted_text = ctx.redacted_text if scan_result.detected else user_text
+        prompt_hash = hashlib.sha256(redacted_text.encode("utf-8")).hexdigest()[:16]
+        prompt_chars = len(user_text)
+
         meta = {
             "intended_tier": intended_tier,
             "actual_tier": 1,  # M1: always tier 1 after redaction
             "route": route,
             "pii_clean": pii_clean,
             "redacted_fields": redacted_fields,
+            "redacted_fields_count": len(redacted_fields),
             "classifier_reason": classifier_reason,
+            "prompt_hash": prompt_hash,
+            "prompt_chars": prompt_chars,
+            "scan_error": False,
         }
         return active_messages, meta
+
+    def _scan_error_meta(self, exc: BaseException, user_text: str) -> dict[str, Any]:
+        """Trace metadata for a scanner failure — used by fail-closed paths.
+
+        ``actual_tier`` is ``None`` because no upstream call is made: the request
+        is aborted before any text leaves this process. The trace remains the only
+        record that the request happened, which is why the field is mandatory.
+        """
+        return {
+            "intended_tier": 2,
+            "actual_tier": None,
+            "route": "scan_error",
+            "pii_clean": False,
+            "redacted_fields": [],
+            "redacted_fields_count": 0,
+            "classifier_reason": f"scan_error:{type(exc).__name__}",
+            "prompt_hash": "",
+            "prompt_chars": len(user_text),
+            "scan_error": True,
+        }
 
     # ------------------------------------------------------------------
     # _generate
@@ -188,7 +228,12 @@ class RouterChatModel(BaseChatModel):
         span_id = str(uuid.uuid4())
         ts_start = datetime.now(timezone.utc).isoformat()
 
-        active_messages, meta = self._route(messages)
+        try:
+            active_messages, meta = self._route(messages)
+        except Exception as exc:
+            err_meta = self._scan_error_meta(exc, _human_text(messages))
+            self._write_trace(trace_id, span_id, ts_start, err_meta)
+            raise
 
         import time
         t0 = time.perf_counter()
@@ -219,7 +264,12 @@ class RouterChatModel(BaseChatModel):
         span_id = str(uuid.uuid4())
         ts_start = datetime.now(timezone.utc).isoformat()
 
-        active_messages, meta = self._route(messages)
+        try:
+            active_messages, meta = self._route(messages)
+        except Exception as exc:
+            err_meta = self._scan_error_meta(exc, _human_text(messages))
+            self._write_trace(trace_id, span_id, ts_start, err_meta)
+            raise
 
         import time
         t0 = time.perf_counter()
@@ -245,7 +295,12 @@ class RouterChatModel(BaseChatModel):
         span_id = str(uuid.uuid4())
         ts_start = datetime.now(timezone.utc).isoformat()
 
-        active_messages, meta = self._route(messages)
+        try:
+            active_messages, meta = self._route(messages)
+        except Exception as exc:
+            err_meta = self._scan_error_meta(exc, _human_text(messages))
+            self._write_trace(trace_id, span_id, ts_start, err_meta)
+            raise
 
         import time
         t0 = time.perf_counter()
@@ -289,6 +344,8 @@ class RouterChatModel(BaseChatModel):
             "classifier_reason": meta["classifier_reason"],
             "pii_clean": meta["pii_clean"],
             "redacted_fields": meta["redacted_fields"],
+            "redacted_fields_count": meta["redacted_fields_count"],
+            "scan_error": meta.get("scan_error", False),
             "input_tokens": input_tokens,
             "output_tokens": output_tokens,
             "cached_input_tokens": 0,
@@ -296,7 +353,8 @@ class RouterChatModel(BaseChatModel):
             "tpot_ms": 0,
             "total_latency_ms": total_latency_ms,
             "cost_usd": 0.0,
-            "prompt_hash": "",
+            "prompt_hash": meta["prompt_hash"],
+            "prompt_chars": meta["prompt_chars"],
             "tool_calls": [],
             "escalation_signal": None,
         })

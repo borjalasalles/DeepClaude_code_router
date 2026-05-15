@@ -22,6 +22,11 @@ dev = [
     "ruff",
     "mypy",
 ]
+notebook = [
+    "pandas>=2",
+    "matplotlib>=3.8",
+    "jupyter>=1.1",
+]
 
 [tool.uv]
 package = true

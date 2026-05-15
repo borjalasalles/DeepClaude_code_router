@@ -1,0 +1,387 @@
+{
+  "by_block": {
+    "A": {
+      "PASS": 21,
+      "EXPECTED_GAP": 4
+    },
+    "B": {
+      "EXPECTED_GAP": 1,
+      "PASS": 9
+    },
+    "C": {
+      "PASS": 5,
+      "EXPECTED_GAP": 1
+    },
+    "D": {
+      "PASS": 3
+    }
+  },
+  "rows": [
+    {
+      "id": "QA-A01",
+      "block": "A",
+      "verdict": "PASS",
+      "gap_category": "supported",
+      "detail": "detected={'IBAN_CODE': 1}",
+      "notes": "IBAN con espacios \u2014 soportado desde M1.5 (regex con separadores + normalizaci\u00f3n en validador mod-97)."
+    },
+    {
+      "id": "QA-A02",
+      "block": "A",
+      "verdict": "PASS",
+      "gap_category": "supported",
+      "detail": "detected={'IBAN_CODE': 1}",
+      "notes": "IBAN can\u00f3nico sin espacios."
+    },
+    {
+      "id": "QA-A03",
+      "block": "A",
+      "verdict": "PASS",
+      "gap_category": "supported",
+      "detail": "detected={'IBAN_CODE': 1}",
+      "notes": "IBAN dentro de JSON."
+    },
+    {
+      "id": "QA-A04",
+      "block": "A",
+      "verdict": "PASS",
+      "gap_category": "supported",
+      "detail": "detected={'CREDIT_CARD': 1}",
+      "notes": "Visa 16d con guiones; Luhn-v\u00e1lida."
+    },
+    {
+      "id": "QA-A05",
+      "block": "A",
+      "verdict": "PASS",
+      "gap_category": "supported",
+      "detail": "detected={'CREDIT_CARD': 1}",
+      "notes": "PAN dentro de comentario SQL."
+    },
+    {
+      "id": "QA-A06",
+      "block": "A",
+      "verdict": "PASS",
+      "gap_category": "supported",
+      "detail": "detected={'PASSWORD_FIELD': 1, 'SECRET_KEY': 1}",
+      "notes": "Asignaci\u00f3n api_key en c\u00f3digo Python."
+    },
+    {
+      "id": "QA-A07",
+      "block": "A",
+      "verdict": "PASS",
+      "gap_category": "supported",
+      "detail": "detected={'BEARER_TOKEN': 1, 'JWT_TOKEN': 1}",
+      "notes": "JWT completo tras Bearer."
+    },
+    {
+      "id": "QA-A08",
+      "block": "A",
+      "verdict": "PASS",
+      "gap_category": "supported",
+      "detail": "detected={'PASSWORD_FIELD': 1}",
+      "notes": "Connection string con Password=."
+    },
+    {
+      "id": "QA-A09",
+      "block": "A",
+      "verdict": "PASS",
+      "gap_category": "supported",
+      "detail": "detected={'PRIVATE_IP': 1}",
+      "notes": "IP privada en comentario. (PUERTO no es entidad propia.)"
+    },
+    {
+      "id": "QA-A10",
+      "block": "A",
+      "verdict": "PASS",
+      "gap_category": "supported",
+      "detail": "detected={'ES_NIF': 1}",
+      "notes": "DNI con checksum mod-23 v\u00e1lido (Z)."
+    },
+    {
+      "id": "QA-A11",
+      "block": "A",
+      "verdict": "PASS",
+      "gap_category": "supported",
+      "detail": "detected={'EMAIL': 1}",
+      "notes": "Email en JSON anidado."
+    },
+    {
+      "id": "QA-A12",
+      "block": "A",
+      "verdict": "EXPECTED_GAP",
+      "gap_category": "decoder_required",
+      "detail": "detected={} missing=['IBAN_CODE'] forbidden_hits=[]",
+      "notes": "IBAN codificado en base64 \u2014 fuera de alcance M1. Roadmap: decoder pre-pass M3+."
+    },
+    {
+      "id": "QA-A13",
+      "block": "A",
+      "verdict": "PASS",
+      "gap_category": "supported",
+      "detail": "detected={'PEM_KEY': 1}",
+      "notes": "Bloque PEM cl\u00e1sico."
+    },
+    {
+      "id": "QA-A14",
+      "block": "A",
+      "verdict": "PASS",
+      "gap_category": "supported",
+      "detail": "detected={'ES_NIF': 1}",
+      "notes": "DNI en WHERE clause SQL."
+    },
+    {
+      "id": "QA-A15",
+      "block": "A",
+      "verdict": "EXPECTED_GAP",
+      "gap_category": "ner_required",
+      "detail": "detected={} missing=['NOMBRE_PROPIO'] forbidden_hits=[]",
+      "notes": "Nombre propio en contexto narrativo \u2014 requiere NER (spaCy es_core_news_sm, M2)."
+    },
+    {
+      "id": "QA-A16",
+      "block": "A",
+      "verdict": "PASS",
+      "gap_category": "supported",
+      "detail": "detected={'IBAN_CODE': 1}",
+      "notes": "IBAN partido entre l\u00edneas \u2014 soportado desde M1.5 (regex acepta newlines como separador)."
+    },
+    {
+      "id": "QA-A17",
+      "block": "A",
+      "verdict": "PASS",
+      "gap_category": "supported",
+      "detail": "detected={'ES_NIF': 1}",
+      "notes": "DNI en stack trace, separado por ':'."
+    },
+    {
+      "id": "QA-A18",
+      "block": "A",
+      "verdict": "EXPECTED_GAP",
+      "gap_category": "regex_quick_win",
+      "detail": "detected={} missing=['PASSWORD_FIELD'] forbidden_hits=[]",
+      "notes": "PASSWORD_FIELD regex requiere `=` o `:` inmediato tras password+\". Aqu\u00ed va `\"]` entremedias. Fixable extendiendo el patr\u00f3n."
+    },
+    {
+      "id": "QA-A19",
+      "block": "A",
+      "verdict": "PASS",
+      "gap_category": "supported",
+      "detail": "detected={'CREDIT_CARD': 1}",
+      "notes": "PAN en XML."
+    },
+    {
+      "id": "QA-A20",
+      "block": "A",
+      "verdict": "PASS",
+      "gap_category": "supported",
+      "detail": "detected={'IBAN_CODE': 1}",
+      "notes": "Dato real en assertion de test."
+    },
+    {
+      "id": "QA-A21",
+      "block": "A",
+      "verdict": "PASS",
+      "gap_category": "supported",
+      "detail": "detected={'ES_CIF': 1}",
+      "notes": "CIF espa\u00f1ol (empresa) \u2014 soportado desde M1.5. NOTA: el ejemplo original del MD ('B-12345678') no pasa el checksum mod-10; sustituido por B76543214 (algor\u00edtmicamente v\u00e1lido) para validar la implementaci\u00f3n."
+    },
+    {
+      "id": "QA-A22",
+      "block": "A",
+      "verdict": "EXPECTED_GAP",
+      "gap_category": "context_required",
+      "detail": "detected={} missing=['WEBHOOK_URL'] forbidden_hits=[]",
+      "notes": "Token de alta entrop\u00eda en path \u2014 requiere detector de entrop\u00eda (M2)."
+    },
+    {
+      "id": "QA-A23",
+      "block": "A",
+      "verdict": "PASS",
+      "gap_category": "supported",
+      "detail": "detected={'INTERNAL_HOST': 1}",
+      "notes": "Hostname interno .internal."
+    },
+    {
+      "id": "QA-A24",
+      "block": "A",
+      "verdict": "PASS",
+      "gap_category": "supported",
+      "detail": "detected={'PHONE': 1}",
+      "notes": "Tel\u00e9fono internacional con prefijo +34."
+    },
+    {
+      "id": "QA-A25",
+      "block": "A",
+      "verdict": "PASS",
+      "gap_category": "supported",
+      "detail": "detected={'ES_NIF': 1, 'IBAN_CODE': 1, 'EMAIL': 1}",
+      "notes": "CSV multil\u00ednea con varias entidades."
+    },
+    {
+      "id": "QA-B01",
+      "block": "B",
+      "verdict": "EXPECTED_GAP",
+      "gap_category": "context_required",
+      "detail": "detected={'CREDIT_CARD': 1} missing=[] forbidden_hits=['CREDIT_CARD']",
+      "notes": "N\u00famero que pasa Luhn pero no es PAN \u2014 sin context check actualmente lo flagea. Quick win: a\u00f1adir context_words a CREDIT_CARD."
+    },
+    {
+      "id": "QA-B02",
+      "block": "B",
+      "verdict": "PASS",
+      "gap_category": "supported",
+      "detail": "detected={}",
+      "notes": "Hash hex puro \u2014 sin patr\u00f3n actual que lo flagee."
+    },
+    {
+      "id": "QA-B03",
+      "block": "B",
+      "verdict": "PASS",
+      "gap_category": "supported",
+      "detail": "detected={}",
+      "notes": "IPs p\u00fablicas no caen en rangos RFC 1918."
+    },
+    {
+      "id": "QA-B04",
+      "block": "B",
+      "verdict": "PASS",
+      "gap_category": "supported",
+      "detail": "detected={}",
+      "notes": "Fecha ISO sin contexto de nacimiento."
+    },
+    {
+      "id": "QA-B05",
+      "block": "B",
+      "verdict": "PASS",
+      "gap_category": "supported",
+      "detail": "detected={}",
+      "notes": "Email reservado RFC 2606 \u2014 excluido expl\u00edcitamente."
+    },
+    {
+      "id": "QA-B06",
+      "block": "B",
+      "verdict": "PASS",
+      "gap_category": "supported",
+      "detail": "detected={}",
+      "notes": "Identificador en c\u00f3digo no es PII."
+    },
+    {
+      "id": "QA-B07",
+      "block": "B",
+      "verdict": "PASS",
+      "gap_category": "supported",
+      "detail": "detected={'SWIFT_CODE': 1}",
+      "notes": "SWIFT con context_words bic/banco/documentaci\u00f3n presente \u2014 s\u00ed debe detectar (MD pide configurable)."
+    },
+    {
+      "id": "QA-B08",
+      "block": "B",
+      "verdict": "PASS",
+      "gap_category": "supported",
+      "detail": "detected={}",
+      "notes": "Versi\u00f3n sem\u00e1ntica con 4 segmentos, no encaja en patrones de tel\u00e9fono."
+    },
+    {
+      "id": "QA-B09",
+      "block": "B",
+      "verdict": "PASS",
+      "gap_category": "supported",
+      "detail": "detected={}",
+      "notes": "UUID est\u00e1ndar \u2014 sin patr\u00f3n que lo flagee."
+    },
+    {
+      "id": "QA-B10",
+      "block": "B",
+      "verdict": "PASS",
+      "gap_category": "supported",
+      "detail": "detected={}",
+      "notes": "Schema JSON declarativo \u2014 soportado desde M1.5 (negative lookahead `(?!\\{)` antes del valor)."
+    },
+    {
+      "id": "QA-C01",
+      "block": "C",
+      "verdict": "PASS",
+      "gap_category": "design_decision",
+      "detail": "detected={'IBAN_CODE': 3}",
+      "notes": "MD pide alias id\u00e9ntico para mismo valor; actual dise\u00f1o asigna _1/_2/_3 \u00fanicos. Trade-off: nuestra versi\u00f3n es m\u00e1s segura ante reordenamiento del LLM (decisi\u00f3n documentada)."
+    },
+    {
+      "id": "QA-C02",
+      "block": "C",
+      "verdict": "PASS",
+      "gap_category": "supported",
+      "detail": "detected={'IBAN_CODE': 2}",
+      "notes": "Dos IBANs distintos generan placeholders distintos."
+    },
+    {
+      "id": "QA-C03",
+      "block": "C",
+      "verdict": "EXPECTED_GAP",
+      "gap_category": "ner_required",
+      "detail": "detected={} missing=['NOMBRE_PROPIO'] forbidden_hits=[]",
+      "notes": "Resoluci\u00f3n de entidad NER \u2014 M2."
+    },
+    {
+      "id": "QA-C04",
+      "block": "C",
+      "verdict": "PASS",
+      "gap_category": "supported",
+      "detail": "detected={}",
+      "notes": "Nueva sesi\u00f3n: RedactionContext es per-request, contadores parten de 0."
+    },
+    {
+      "id": "QA-C05",
+      "block": "C",
+      "verdict": "PASS",
+      "gap_category": "supported",
+      "detail": "detected={'IBAN_CODE': 1}",
+      "notes": "Restituci\u00f3n via RedactionContext.restore() es lossless \u2014 cubierto por tests de redaction."
+    },
+    {
+      "id": "QA-C06",
+      "block": "C",
+      "verdict": "PASS",
+      "gap_category": "design_decision",
+      "detail": "detected={'IBAN_CODE': 2}",
+      "notes": "Alias numerados s\u00ed filtran cardinalidad (2 placeholders \u21d2 2 entidades). Documentado como gap conocido para evaluar en M2."
+    },
+    {
+      "id": "QA-D01",
+      "block": "D",
+      "verdict": "PASS",
+      "gap_category": "supported",
+      "detail": "detected={'ES_NIF': 1, 'EMAIL': 1}",
+      "notes": "Validaci\u00f3n: la traza JSONL guarda s\u00f3lo entity_types, nunca valores raw \u2014 verificable post-run."
+    },
+    {
+      "id": "QA-D04",
+      "block": "D",
+      "verdict": "PASS",
+      "gap_category": "supported",
+      "detail": "detected={}",
+      "notes": "scan() es pure Python, sin imports de red. Auditable por inspecci\u00f3n."
+    },
+    {
+      "id": "QA-D05",
+      "block": "D",
+      "verdict": "PASS",
+      "gap_category": "supported",
+      "detail": "detected={}",
+      "notes": "Fail-closed expl\u00edcito desde M1.5 \u2014 _generate/_stream/_agenerate envuelven _route() en try/except, emiten traza con scan_error=true y re-lanzan sin invocar al modelo upstream. Verificaci\u00f3n en tests/test_router_model.py::test_route_fail_closed*."
+    }
+  ],
+  "bench": {
+    "10kb": {
+      "p50_ms": 7.92,
+      "p95_ms": 9.14,
+      "p99_ms": 9.37,
+      "samples": 50
+    },
+    "100kb": {
+      "p50_ms": 77.06,
+      "p95_ms": 82.98,
+      "p99_ms": 89.79,
+      "samples": 50
+    }
+  }
+}

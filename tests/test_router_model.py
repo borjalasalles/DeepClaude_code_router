@@ -227,3 +227,74 @@ def test_trace_written_on_clean_call(monkeypatch: pytest.MonkeyPatch) -> None:
         router._generate([HumanMessage(content="how do I sort a list in Python?")])
     assert captured[0]["pii_clean"] is True
     assert captured[0]["route_decision"] == "public"
+    assert captured[0]["scan_error"] is False
+
+
+# ---------------------------------------------------------------------------
+# Fail-closed (QA-D05) — scanner exceptions abort upstream call
+# ---------------------------------------------------------------------------
+
+def test_route_fail_closed_aborts_upstream(monkeypatch: pytest.MonkeyPatch) -> None:
+    """If the scanner raises, _generate must not invoke tier1 and must propagate."""
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test-" + "x" * 20)
+    router = _make_router()
+    router._tier1._generate = MagicMock(return_value=_fake_result())
+
+    with patch(
+        "deep_devops.router.model.scan",
+        side_effect=RuntimeError("synthetic scanner failure"),
+    ), patch("deep_devops.router.model._append_trace"):
+        with pytest.raises(RuntimeError, match="synthetic scanner failure"):
+            router._generate([HumanMessage(content="anything at all")])
+
+    router._tier1._generate.assert_not_called()
+
+
+def test_route_fail_closed_writes_scan_error_trace(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The trace must record scan_error=true with classifier_reason scan_error:<ExcType>."""
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test-" + "x" * 20)
+    router = _make_router()
+    router._tier1._generate = MagicMock(return_value=_fake_result())
+
+    captured: list[dict] = []
+    with patch(
+        "deep_devops.router.model.scan",
+        side_effect=ValueError("boom"),
+    ), patch("deep_devops.router.model._append_trace", side_effect=captured.append):
+        with pytest.raises(ValueError):
+            router._generate([HumanMessage(content="any prompt")])
+
+    assert len(captured) == 1
+    trace = captured[0]
+    assert trace["scan_error"] is True
+    assert trace["route_decision"] == "scan_error"
+    assert trace["tier"] is None  # no upstream tier reached
+    assert trace["classifier_reason"] == "scan_error:ValueError"
+    assert trace["pii_clean"] is False
+    assert trace["redacted_fields"] == []
+    # No content leak: prompt_chars is just a length, no hash of unscanned content.
+    assert trace["prompt_chars"] == len("any prompt")
+    assert trace["prompt_hash"] == ""
+
+
+def test_route_fail_closed_async_aborts_upstream(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Same fail-closed guarantee on the async path — tier1 must not be invoked."""
+    import asyncio
+
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test-" + "x" * 20)
+    router = _make_router()
+    # Fail-closed raises before reaching this; the assertion below verifies that.
+    router._tier1._agenerate = MagicMock()
+
+    with patch(
+        "deep_devops.router.model.scan",
+        side_effect=RuntimeError("async scanner failure"),
+    ), patch("deep_devops.router.model._append_trace"):
+        with pytest.raises(RuntimeError, match="async scanner failure"):
+            asyncio.run(router._agenerate([HumanMessage(content="async prompt")]))
+
+    router._tier1._agenerate.assert_not_called()

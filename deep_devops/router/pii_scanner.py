@@ -45,6 +45,10 @@ class EntityType:
     SWIFT_CODE      = "SWIFT_CODE"
     CREDIT_CARD     = "CREDIT_CARD"
     IBAN_CODE       = "IBAN_CODE"
+    ES_CIF          = "ES_CIF"           # Spanish corporate tax ID
+    CLABE           = "CLABE"            # Mexican bank account standard (18 digits)
+    ABA_ROUTING     = "ABA_ROUTING"      # US Fedwire/ACH routing number (9 digits)
+    US_BANK_ACCOUNT = "US_BANK_ACCOUNT"  # US bank account number (variable length)
     # PII
     EMAIL           = "EMAIL"
     PHONE           = "PHONE"
@@ -76,17 +80,112 @@ def _luhn_check(value: str) -> bool:
     return total % 10 == 0
 
 
-def _iban_mod97(value: str) -> bool:
-    """ISO 13616 IBAN mod-97 check."""
-    s = value.strip().replace(" ", "").upper()
-    if len(s) < 5:
+_IBAN_SEPARATOR_RE = re.compile(r"[\s\-]")
+
+# ISO 13616 IBAN registry — official total length per country code.
+# Source: SWIFT IBAN registry (https://www.swift.com/standards/data-standards/iban),
+# coverage includes EU/EEA, UK, Switzerland, Latin America, Middle East, North Africa
+# and others. The US/Canada are intentionally absent — they use ABA / transit codes.
+_IBAN_LENGTHS: dict[str, int] = {
+    "AD": 24, "AE": 23, "AL": 28, "AT": 20, "AZ": 28,
+    "BA": 20, "BE": 16, "BG": 22, "BH": 22, "BI": 27, "BR": 29, "BY": 28,
+    "CH": 21, "CR": 22, "CY": 28, "CZ": 24,
+    "DE": 22, "DJ": 27, "DK": 18, "DO": 28,
+    "EE": 20, "EG": 29, "ES": 24,
+    "FI": 18, "FO": 18, "FR": 27,
+    "GB": 22, "GE": 22, "GI": 23, "GL": 18, "GR": 27, "GT": 28,
+    "HR": 21, "HU": 28,
+    "IE": 22, "IL": 23, "IQ": 23, "IR": 26, "IS": 26, "IT": 27,
+    "JO": 30,
+    "KW": 30, "KZ": 20,
+    "LB": 28, "LC": 32, "LI": 21, "LT": 20, "LU": 20, "LV": 21, "LY": 25,
+    "MC": 27, "MD": 24, "ME": 22, "MK": 19, "MR": 27, "MT": 31, "MU": 30,
+    "NI": 28, "NL": 18, "NO": 15,
+    "OM": 23,
+    "PK": 24, "PL": 28, "PS": 29, "PT": 25,
+    "QA": 29,
+    "RO": 24, "RS": 22, "RU": 33,
+    "SA": 24, "SC": 31, "SD": 18, "SE": 24, "SI": 19, "SK": 24, "SM": 27,
+    "SO": 23, "ST": 25, "SV": 28,
+    "TL": 23, "TN": 24, "TR": 26,
+    "UA": 29,
+    "VA": 22, "VG": 24,
+    "XK": 20,
+    "YE": 30,
+}
+
+
+def _iban_country_length(value: str) -> bool:
+    """Validate IBAN by country-code + total-length (no mod-97 checksum).
+
+    Redundant given the country-aware regex below, but kept as a defensive
+    invariant so that any future regex relaxation does not silently widen FPs.
+
+    Design choice (M1.5, after a real leak with a mod-97-invalid IBAN reaching
+    DeepSeek): the bank/corp threat model treats any string of the form
+    *CC + 2 digits + BBAN* as IBAN-intent — real, mistyped or fictional — and
+    redacts it. Dropping the checksum widens recall; the country whitelist +
+    exact length keeps precision high enough that random alphanumerics don't
+    trip the detector.
+    """
+    s = _IBAN_SEPARATOR_RE.sub("", value).upper()
+    if len(s) < 4:
         return False
-    rearranged = s[4:] + s[:4]
-    number_str = "".join(str(ord(c) - 55) if c.isalpha() else c for c in rearranged)
-    try:
-        return int(number_str) % 97 == 1
-    except ValueError:
+    return _IBAN_LENGTHS.get(s[:2]) == len(s)
+
+
+def _build_iban_regex() -> re.Pattern:
+    """Country-aware IBAN regex, one alternation per ISO 13616 country.
+
+    Anchoring the BBAN length per country prevents greedy over-extension into
+    surrounding text (e.g. the regex stopping at 'ayer' in '...1234567890 ayer'
+    because [A-Z0-9] would otherwise keep consuming letters).
+    """
+    parts = [
+        f"{cc}\\d{{2}}(?:[\\s\\-]*[A-Z0-9]){{{length - 4}}}"
+        for cc, length in _IBAN_LENGTHS.items()
+    ]
+    return re.compile(r"\b(?:" + "|".join(parts) + r")\b", re.IGNORECASE)
+
+
+_IBAN_REGEX = _build_iban_regex()
+
+
+def _cif_check(value: str) -> bool:
+    """Spanish CIF (corporate tax ID) checksum.
+
+    Format: L NNNNNNN C
+      L = entity-class letter ∈ {A,B,C,D,E,F,G,H,J,N,P,Q,R,S,U,V,W}
+      N = 7 inner digits
+      C = control character (digit, letter, or either, depending on L)
+
+    Algorithm:
+      - Sum digits at even positions (2,4,6) as-is.
+      - Sum digits at odd positions (1,3,5,7) after doubling and summing digits
+        of each product.
+      - control_digit = (10 - total mod 10) mod 10.
+      - For L ∈ {A,B,E,H} the control must be the digit string.
+      - For L ∈ {K,P,Q,R,N,W} the control must be 'JABCDEFGHI'[control_digit].
+      - For the rest, either form is accepted.
+    """
+    v = _IBAN_SEPARATOR_RE.sub("", value).upper()
+    if len(v) != 9:
         return False
+    letter, digits, control = v[0], v[1:8], v[8]
+    if not digits.isdigit():
+        return False
+    odd_sum = 0
+    for d in (int(digits[i]) for i in (0, 2, 4, 6)):
+        doubled = d * 2
+        odd_sum += doubled // 10 + doubled % 10
+    even_sum = sum(int(digits[i]) for i in (1, 3, 5))
+    control_digit = (10 - (odd_sum + even_sum) % 10) % 10
+    control_letter = "JABCDEFGHI"[control_digit]
+    if letter in "ABEH":
+        return control == str(control_digit)
+    if letter in "KPQRNW":
+        return control == control_letter
+    return control == str(control_digit) or control == control_letter
 
 
 _NIF_LETTERS = "TRWAGMYFPDXBNJZSQVHLCKE"
@@ -248,13 +347,79 @@ _PATTERNS: list[_Pattern] = [
         validator=_luhn_check,
     ),
 
-    # Spanish IBAN: ES + 2 check digits + 20 digits (bank+branch+control+account).
-    # mod-97 post-filter; pattern is already specific enough without context_words.
+    # IBAN (ISO 13616, international): country code + 2 check digits + BBAN.
+    # BBAN may contain letters (UK, IE, MT, ...) so the body is [A-Z0-9].
+    # FIX M1.5 (post real-world leak):
+    #   - Multi-country: any country in the ISO 13616 registry, not just ES.
+    #   - Country-aware length: regex anchors BBAN to the exact length per
+    #     country so it doesn't over-extend into surrounding letters.
+    #   - Irregular grouping: separators allowed between any two BBAN chars
+    #     ('ES21 1465 0100 92 1234567890' was the leaking case).
+    #   - No mod-97: bank/corp threat model treats even checksum-invalid
+    #     IBAN-shaped strings as IBAN-intent (typo of a real IBAN).
     _Pattern(
         EntityType.IBAN_CODE,
-        re.compile(r"\bES\d{22}\b"),
+        _IBAN_REGEX,
         "[IBAN_CODE]",
-        validator=_iban_mod97,
+        validator=_iban_country_length,
+    ),
+
+    # Mexican CLABE (Clave Bancaria Estandarizada): 18 digits, no country prefix.
+    # Added in M1.5 after a real leak — a CLABE reached DeepSeek because nothing
+    # in the original M1 patterns matched 18-digit raw strings. Context-gated to
+    # keep precision: an 18-digit string in an unrelated context (timestamp, ID)
+    # is unlikely to also have Mexican-banking keywords nearby.
+    _Pattern(
+        EntityType.CLABE,
+        re.compile(r"\b\d{18}\b"),
+        "[CLABE]",
+        context_words=frozenset({
+            "clabe", "banamex", "banorte", "bbva", "santander",
+            "hsbc", "spei", "mexico", "méxico", "mx",
+        }),
+    ),
+
+    # US ABA routing number: 9 digits identifying a US bank for ACH/Fedwire.
+    # The bare-9-digit PHONE pattern catches these by accident; this entry makes
+    # the category explicit so traces show what was actually redacted. Both patterns
+    # fire on the same span — the redactor emits both placeholders, which is harmless
+    # (real value is gone either way).
+    _Pattern(
+        EntityType.ABA_ROUTING,
+        re.compile(r"\b\d{9}\b"),
+        "[ABA_ROUTING]",
+        context_words=frozenset({
+            "aba", "routing", "fedwire", "ach", "us bank", "wire transfer",
+            "chase", "wells fargo", "bank of america", "citibank",
+        }),
+    ),
+
+    # US bank account number: 10-17 digits with strong banking context.
+    # Range starts at 10 to avoid double-matching with ABA_ROUTING (9 digits).
+    # No structural marker (unlike IBAN's country code), so we rely entirely on
+    # nearby keywords. Threat model is bank/corp denial-by-default — accept some
+    # false positives on long numerals near banking words.
+    _Pattern(
+        EntityType.US_BANK_ACCOUNT,
+        re.compile(r"\b\d{10,17}\b"),
+        "[US_BANK_ACCOUNT]",
+        context_words=frozenset({
+            "chase", "wells fargo", "bank of america", "citibank", "citi",
+            "checking account", "savings account", "account number",
+            "account is", "fedwire", "ach", "wire transfer", "wire to",
+            "deposit", "routing",
+        }),
+    ),
+
+    # Spanish CIF: 1 entity-class letter + 7 digits + 1 control char.
+    # Optional dash between letter and digits ('B-12345678') is the common
+    # visual form. Validator implements the mod-10 algorithm + per-letter
+    # rule for whether the control is digit / letter / either.
+    _Pattern(
+        EntityType.ES_CIF,
+        re.compile(r"\b[ABCDEFGHJNPQRSUVW]-?\d{7}[0-9A-J]\b"),
+        "[ES_CIF]",
+        validator=_cif_check,
     ),
 
     # ── PII ──────────────────────────────────────────────────────────────────
@@ -293,12 +458,15 @@ _PATTERNS: list[_Pattern] = [
     # Optional surrounding quotes on the key handle JSON object keys.
     # Optional leading quote on the value handles JSON string values.
     # FIX B3: added access_key, secret_key, api_key, clave, secret, token.
+    # FIX M1.5 (QA-B10): negative lookahead rejects JSON-Schema-style definitions
+    # where the value is an object (`"password": {"type": "string"}`) instead of
+    # an actual credential.
     _Pattern(
         EntityType.PASSWORD_FIELD,
         re.compile(
             r'(?:"?(?:password|contraseña|passwd|pwd|pass'
             r'|access_key|secret_key|api_key|clave|secret|token)"?)'
-            r'\s*[=:]\s*"?\S+',
+            r'\s*[=:]\s*(?!\{)"?\S+',
             re.IGNORECASE,
         ),
         "[PASSWORD_FIELD]",

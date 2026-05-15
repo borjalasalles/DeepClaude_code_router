@@ -8,7 +8,9 @@ Open-source coding agent built on [`langchain-ai/deepagents`](https://github.com
 
 ## Status
 
-**M1 complete.** The router is live: `deepagents --model deep-devops:router` works end-to-end. PII in your messages is redacted before reaching DeepSeek, and every call is traced to `~/.deep_devops/traces.jsonl`. Tiers 2 (Nebius) and 3 (Anthropic) are designed and logged but not yet wired — all traffic currently routes to tier 1 after redaction. See [`docs/design.md`](docs/design.md) for the full architecture.
+**M1.5 complete (2026-05-15).** The router is live: `deepagents --model deep-devops:router` works end-to-end. PII in your messages is redacted before reaching DeepSeek, and every call is traced to `~/.deep_devops/traces.jsonl`. Tiers 2 (Nebius) and 3 (Anthropic) are designed and logged but not yet wired — all traffic currently routes to tier 1 after redaction. See [`docs/design.md`](docs/design.md) for the architecture and [`docs/session-2026-05-15.md`](docs/session-2026-05-15.md) for the latest hardening notes.
+
+M1.5 added, on top of M1: international IBAN coverage (~85 countries, ISO 13616, no checksum gate — denial-by-default), Spanish CIF, Mexican CLABE, US ABA routing, US bank account numbers, JSON-Schema exclusion for password fields, explicit fail-closed on scanner errors, and a 4-check observability dashboard at `evals/notebooks/traces_dashboard.ipynb`.
 
 The project is mirrored to GitHub at [`borjalasalles/DeepClaude_code_router`](https://github.com/borjalasalles/DeepClaude_code_router). That remote is the canonical off-machine **backup** — commit and push regularly so work survives a machine loss or migration between computers.
 
@@ -38,19 +40,25 @@ The project is mirrored to GitHub at [`borjalasalles/DeepClaude_code_router`](ht
 | Database URLs with credentials | `postgres://user:pass@host`, `mysql://...`, `redis://...` | `{/DATABASE_URL_1/}` |
 | SWIFT / BIC codes | `CAIXESBBXXX` (only when banking keywords nearby) | `{/SWIFT_CODE_1/}` |
 | Credit / debit cards | `4111 1111 1111 1111`, `4111-1111-1111-1111`, `378282246310005` — Luhn-validated | `{/CREDIT_CARD_1/}` |
-| Spanish IBANs | `ES9121000418450200051332` — mod-97 validated | `{/IBAN_CODE_1/}` |
+| International IBANs (ISO 13616) | `ES9121000418450200051332`, `GB29 NWBK 6016 1331 9268 19`, `DE89 3704 0044 0532 0130 00`, `CH93 0076 2011 6238 5295 7`, `BR97 0036 0305 0000 1000 9795 493P 1`, … — ~85 countries (EU/EEA, UK, Switzerland, MENA, Latin America). Country-aware regex anchors to each country's exact length; **no mod-97 checksum gate** so typos and fictional IBANs are still redacted (denial-by-default after a real leak). | `{/IBAN_CODE_1/}` |
+| Mexican CLABE | `002115012345678901` (18 digits in Mexican-banking context: `clabe`, `banamex`, `spei`, `méxico`, …) | `{/CLABE_1/}` |
+| US ABA routing | `123456780` (9 digits in US-banking context: `aba`, `routing`, `fedwire`, `ach`, `chase`, …) | `{/ABA_ROUTING_1/}` |
+| US bank account | `440012345678` (10-17 digits in US-banking context: `chase`, `wells fargo`, `checking account`, `wire transfer`, …) | `{/US_BANK_ACCOUNT_1/}` |
 | **PII** | | |
 | Emails | `user@company.com` (RFC 2606 example domains excluded) | `{/EMAIL_1/}` |
 | Phone numbers | `+34 612 345 678`, `612 345 678`, `415-555-1234` | `{/PHONE_1/}` |
-| Password / secret fields | `password=X`, `contraseña: X`, `access_key: X`, `secret=X`, `api_key: X`, `"access_key": "X"` (JSON) | `{/PASSWORD_FIELD_1/}` |
+| Password / secret fields | `password=X`, `contraseña: X`, `access_key: X`, `secret=X`, `api_key: X`, `"access_key": "X"` (JSON). JSON-Schema definitions like `"password": {"type": "string"}` are excluded. | `{/PASSWORD_FIELD_1/}` |
 | Spanish DNI (NIF) | `12345678Z` — mod-23 validated | `{/ES_NIF_1/}` |
 | Spanish NIE | `X1234567L` — mod-23 validated | `{/ES_NIE_1/}` |
+| Spanish CIF | `B76543214`, `A28015865` — mod-10 validated, optional `-` separator | `{/ES_CIF_1/}` |
 | **Network / infra markers** | | |
 | Private IPs | `192.168.x.x`, `10.x.x.x`, `172.16–31.x.x` | `{/PRIVATE_IP_1/}` |
 | Internal hostnames | `db.internal`, `server.corp`, `host.lan` | `{/INTERNAL_HOST_1/}` |
 | Secret file paths | `.env`, `/secrets/`, `credentials.json`, `*.pem`, `*.key` | `{/SECRET_PATH_1/}` |
 
-Checksum validators (Luhn, mod-97, mod-23) mean the scanner **only flags real-format values** — a random 16-digit string that fails Luhn is not reported as a credit card.
+Checksum validators (Luhn for cards, mod-23 for NIF/NIE, mod-10 for CIF) keep precision high on identity instruments. For account-style numbers (IBAN, CLABE, US accounts) the threat model is **denial-by-default**: a checksum-invalid IBAN is almost always a typo of a real one and is redacted anyway. CLABE, ABA and US account numbers require nearby banking keywords (`chase`, `banamex`, `routing`, `wire transfer`, …) to fire, which trades a small recall hit for much lower false-positive rate on long numerals.
+
+Scanner errors fail closed: if `scan()` raises, the call to DeepSeek is aborted and a trace with `scan_error: true` is written. The unscanned text never crosses the network.
 
 ### Example
 
@@ -178,8 +186,15 @@ tier1_temperature = 0.0
 **9. Verify and launch:**
 
 ```bash
-uv run pytest                               # expect 100/100
+uv run pytest                               # expect 167/167
+uv run python -m evals.qa_fase1.run         # QA-MD suite: 38/44 PASS, 6 expected M2 gaps
 deepagents --model deep-devops:router
+```
+
+To inspect traces locally:
+```bash
+uv sync --group notebook                    # one-time, installs pandas/matplotlib/jupyter
+uv run jupyter notebook evals/notebooks/traces_dashboard.ipynb
 ```
 
 If `deepagents` is not on your `PATH`, use `"$(uv tool dir)/deepagents-cli/bin/deepagents"`.
@@ -199,6 +214,9 @@ If `deepagents` is not on your `PATH`, use `"$(uv tool dir)/deepagents-cli/bin/d
 - [`CLAUDE.md`](CLAUDE.md) — project skill (loaded into Claude Code sessions)
 - [`docs/design.md`](docs/design.md) — architecture, decisions, citations
 - [`docs/chapters_notes.md`](docs/chapters_notes.md) — condensed *AI Engineering* findings
+- [`docs/qa-fase1-report.md`](docs/qa-fase1-report.md) — M1 QA baseline against the MD spec
+- [`docs/session-2026-05-15.md`](docs/session-2026-05-15.md) — M1.5 sprint + post-leak hardening (latest)
+- [`deepseek_privacidad_api_20260515.md`](deepseek_privacidad_api_20260515.md) — DeepSeek privacy / regulatory research, source spec for the scanner QA suite
 - `docs/<feature>.md` — one note per significant session or feature
 
 ## Licence
