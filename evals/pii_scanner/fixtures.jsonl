@@ -48,3 +48,11 @@
 {"id": "adversarial_bearer_in_prose", "category": "adversarial", "input": "He was a standard bearer of the old traditions in the regiment", "expected_detected": false, "expected_types": [], "notes": "Bearer in natural language prose — followed by short words, not a token"}
 {"id": "adversarial_internal_as_product_name", "category": "adversarial", "input": "The 'Internal Tools' product suite is hosted at tools.company.com", "expected_detected": false, "expected_types": [], "notes": "Word 'Internal' in a product name — does not match *.internal hostname pattern"}
 {"id": "adversarial_172_outside_range", "category": "adversarial", "input": "The server at 172.32.0.1 is in a public cloud DMZ", "expected_detected": false, "expected_types": [], "notes": "172.32.x.x is outside the RFC 1918 range (172.16-31) — NOT private"}
+{"id": "phone_international_es", "category": "pii", "input": "llámame al +34 612 345 678", "expected_detected": true, "expected_types": ["PHONE"], "notes": "Spanish mobile with international prefix"}
+{"id": "phone_9digits_bare", "category": "pii", "input": "mi teléfono es 612345678", "expected_detected": true, "expected_types": ["PHONE"], "notes": "9-digit Spanish mobile, no separators"}
+{"id": "phone_us_format", "category": "pii", "input": "call me at 415-555-1234", "expected_detected": true, "expected_types": ["PHONE"], "notes": "US phone with dashes"}
+{"id": "phone_not_version_number", "category": "pii", "input": "using version 1.2.3 and node 18.0.0", "expected_detected": false, "expected_types": [], "notes": "Version numbers must not be flagged as phones"}
+{"id": "password_field_equals", "category": "secret", "input": "password=MyS3cretP@ss", "expected_detected": true, "expected_types": ["PASSWORD_FIELD"], "notes": "Bare password= assignment"}
+{"id": "password_field_colon", "category": "secret", "input": "passwd: hunter2", "expected_detected": true, "expected_types": ["PASSWORD_FIELD"], "notes": "passwd: key in config-like text"}
+{"id": "password_field_spanish", "category": "secret", "input": "contraseña=Abc123!", "expected_detected": true, "expected_types": ["PASSWORD_FIELD"], "notes": "Spanish keyword contraseña"}
+{"id": "password_field_in_url", "category": "secret", "input": "connect with pwd=secret123 to db", "expected_detected": true, "expected_types": ["PASSWORD_FIELD"], "notes": "pwd= abbreviation"}

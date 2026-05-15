@@ -174,6 +174,10 @@ If all conditions hold → tier 1. Otherwise → tier 2. **The classifier is a w
 
 **Why rules, not LLM-judge here.** Cap 10 p.457 ("fast and cheap"); Cap 3 p.144 (LLM-judge unreliable). For a one-way error like a privacy leak, determinism beats accuracy.
 
+**Scanner coverage (M1):** emails, phone numbers (intl + 9-digit ES/US), password fields (`password=`, `contraseña=`, `pwd=`, `passwd:`), AWS/OpenAI/Anthropic/GitHub/Stripe/Slack/Telegram keys, JWTs, Bearer tokens, PEM keys, DB URLs with embedded passwords, RFC-1918 private IPs, internal hostnames (`.internal`, `.corp`, `.lan`), secret file paths (`.env`, `/secrets/`, `*.pem`, `*.key`, `credentials.*`). 100/100 tests.
+
+**NER gap (M2 candidate):** the regex scanner cannot detect proper names ("García López"), organisations, or arbitrary short passwords without a label. Adding a lightweight NER model (spaCy `es_core_news_sm`, ~12 MB) would add `NOMBRE_PROPIO`, `APELLIDO`, `ORGANIZACION` detection with zero LLM cost and sub-millisecond latency — consistent with the "fast and cheap" principle (Cap 10 p.457). Gated on M2 because it adds a native dependency and requires an eval set for Spanish NER precision/recall.
+
 **Prompt-injection defence.** Cap 10 calls for treating tool outputs (file reads, web fetches) as untrusted input. MVP has no online retrieval, so the surface is file content; we **log** suspicious patterns (jailbreak phrases, role-reversal, system-prompt extraction probes) rather than block. Block-mode arrives when eval coverage distinguishes false positives.
 
 ### 4.3 Output guardrails (Cap 10 §Output Guardrails, p.453–455)
@@ -247,7 +251,7 @@ Three-step recipe mapped:
 
 ### 6.1 Metrics per call (Cap 9 p.412–418)
 
-Logged to JSONL (M1) → LangSmith / Phoenix / OTel (M3):
+Logged to JSONL (M1) → Langfuse (self-hosted) / OTel (M3):
 
 | Metric | Why (book ref) |
 |---|---|
@@ -272,7 +276,41 @@ Percentiles p50/p90/p95/p99 (Cap 9 p.414). Means are forbidden — outliers misl
 
 ### 6.3 Traces (Cap 10 p.470, Fig 10-11)
 
-One `trace_id` per conversation; one `span_id` per model call. Log: final prompt, intermediate outputs, tool calls, tool outputs, timings. M1 = JSONL on disk; M3 = LangSmith / Phoenix / OTel.
+One `trace_id` per conversation; one `span_id` per model call. Log: final prompt, intermediate outputs, tool calls, tool outputs, timings. M1 = JSONL on disk; M3 = Langfuse self-hosted (Docker + Postgres) / OTel.
+
+**Why Langfuse over LangSmith (decided 2026-05-14).** LangSmith free tier shares telemetry; Langfuse is self-hostable (`docker compose up`) with zero third-party telemetry sharing. Native LangChain `CallbackHandler` drops in without code changes — relevant because deepagents is LangChain-based. OTel export keeps us unlocked. Langfuse also provides eval scoring on traces, feeding directly into the §7 skill-factory feedback loop.
+
+**Local telemetry is fully feasible despite serverless API calls (Cap 10 p.469–470).** The application process (`RouterChatModel._generate()`) runs on the user's machine; the provider only handles model inference. Everything measurable from the client side — TTFT (wall-clock from request send to first streamed token), TPOT, total latency, input/output tokens from `usage` metadata, routing decision, PII scan result — is captured locally before the response is returned. Provider-internal queue time is invisible but is implicit in client-measured TTFT, which is the metric that matters for UX.
+
+**M1 JSONL trace schema (one record per model call, appended to `~/.deep_devops/traces.jsonl`):**
+
+```json
+{
+  "trace_id": "<uuid4>",
+  "span_id": "<uuid4>",
+  "ts_start": "<ISO8601>",
+  "model_id": "deepseek-chat",
+  "provider": "deepseek_native|nebius|anthropic",
+  "tier": 1,
+  "route_decision": "public|internal|confidential|escalated",
+  "escalated_from": null,
+  "classifier_reason": "public_markers_present",
+  "pii_clean": true,
+  "redacted_fields": [],
+  "input_tokens": 123,
+  "output_tokens": 45,
+  "cached_input_tokens": 0,
+  "ttft_ms": 234,
+  "tpot_ms": 12.3,
+  "total_latency_ms": 1234,
+  "cost_usd": 0.000034,
+  "prompt_hash": "<sha256 of final prompt>",
+  "tool_calls": [],
+  "escalation_signal": null
+}
+```
+
+M3 upgrade: replace `jsonl.append(record)` with `langfuse.trace(**record)` — same schema, different sink.
 
 ### 6.4 User feedback — implicit signals (Cap 10 p.474–488)
 
@@ -313,15 +351,13 @@ Input to the skill factory. Explicit feedback (👍/👎) suffers from leniency 
 
 ```
 incoming request
-  +-- input guardrails (PII scan, secret scan, injection heuristics)
-  |     +-- confidential AND not safely redactable -> tier 3 (ANTHROPIC)
-  |     +-- redactable -> redact in place; continue
-  |
-  +-- publicness classifier (rules + allowlist, whitelist semantics)
-  |     +-- ALL public markers present AND scan clean
-  |     |     AND DEEP_DEVOPS_DISABLE_PUBLIC_TIER not set
-  |     |     -> tier 1 (DEEPSEEK NATIVE)
-  |     +-- else -> tier 2 (NEBIUS)
+  +-- [PARALLEL] PII/secret scan  ||  publicness pre-check  (Cap 10 p.473 — run concurrently)
+  |     Both are stateless and independent; asyncio.gather() in _generate().
+  |     Combine results:
+  |       confidential AND not redactable              -> tier 3 (ANTHROPIC)
+  |       redactable                                   -> redact in place; continue
+  |       pii_clean AND public AND kill-switch off     -> tier 1 (DEEPSEEK NATIVE)
+  |       else                                         -> tier 2 (NEBIUS)
   |
   +-- context_size > current_tier_context_limit -> escalate one tier up
   |
@@ -370,7 +406,7 @@ class_path = "deep_devops.router.model:RouterChatModel"
 enabled    = true
 ```
 
-`RouterChatModel(BaseChatModel)` in `deep_devops/router/model.py` is the single entry point. Its `_generate()` method runs: PII scan → publicness classifier → tier dispatch → JSONL log. The three tier clients (tier1: DeepSeek native, tier2: Nebius, tier3: Anthropic) live in `deep_devops/gateway/` and are constructed once at agent init from `.env`.
+`RouterChatModel(BaseChatModel)` in `deep_devops/router/model.py` is the single entry point. Its `_generate()` method runs: `asyncio.gather(pii_scan, publicness_check)` → combine results → tier dispatch → JSONL log. The two scans are stateless and independent, so they run concurrently (Cap 10 p.473). The three tier clients (tier1: DeepSeek native, tier2: Nebius, tier3: Anthropic) live in `deep_devops/gateway/` and are constructed once at agent init from `.env`.
 
 Launch: `deepagents --model deep-devops:router`
 

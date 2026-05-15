@@ -22,20 +22,22 @@ from typing import NamedTuple
 # ---------------------------------------------------------------------------
 
 class EntityType:
-    AWS_ACCESS_KEY = "AWS_ACCESS_KEY"
-    SECRET_KEY     = "SECRET_KEY"      # sk-* — OpenAI, Anthropic, generic
-    GITHUB_TOKEN   = "GITHUB_TOKEN"
-    STRIPE_KEY     = "STRIPE_KEY"
-    SLACK_TOKEN    = "SLACK_TOKEN"
-    TELEGRAM_TOKEN = "TELEGRAM_TOKEN"
-    JWT_TOKEN      = "JWT_TOKEN"
-    BEARER_TOKEN   = "BEARER_TOKEN"
-    PEM_KEY        = "PEM_KEY"
-    DATABASE_URL   = "DATABASE_URL"
-    EMAIL          = "EMAIL"
-    PRIVATE_IP     = "PRIVATE_IP"
-    INTERNAL_HOST  = "INTERNAL_HOST"
-    SECRET_PATH    = "SECRET_PATH"
+    AWS_ACCESS_KEY  = "AWS_ACCESS_KEY"
+    SECRET_KEY      = "SECRET_KEY"      # sk-* — OpenAI, Anthropic, generic
+    GITHUB_TOKEN    = "GITHUB_TOKEN"
+    STRIPE_KEY      = "STRIPE_KEY"
+    SLACK_TOKEN     = "SLACK_TOKEN"
+    TELEGRAM_TOKEN  = "TELEGRAM_TOKEN"
+    JWT_TOKEN       = "JWT_TOKEN"
+    BEARER_TOKEN    = "BEARER_TOKEN"
+    PEM_KEY         = "PEM_KEY"
+    DATABASE_URL    = "DATABASE_URL"
+    EMAIL           = "EMAIL"
+    PHONE           = "PHONE"
+    PASSWORD_FIELD  = "PASSWORD_FIELD"
+    PRIVATE_IP      = "PRIVATE_IP"
+    INTERNAL_HOST   = "INTERNAL_HOST"
+    SECRET_PATH     = "SECRET_PATH"
 
 
 # ---------------------------------------------------------------------------
@@ -150,6 +152,36 @@ _PATTERNS: list[_Pattern] = [
             r")\b"
         ),
         "[PRIVATE_IP]",
+    ),
+
+    # -- PII: phone numbers ---------------------------------------------------
+
+    # Conservative: requires country prefix (+XX) OR at least 9 consecutive digits
+    # with common separators.  Avoids catching version numbers (1.2.3) or IDs
+    # by requiring the number to be in a phone-like structure.
+    _Pattern(
+        EntityType.PHONE,
+        re.compile(
+            r"(?:"
+            r"\+\d{1,3}[\s\-.]?\(?\d{1,4}\)?[\s\-.]?\d{1,4}[\s\-.]?\d{1,9}"  # intl format
+            r"|\b\d{3}[\s\-.]?\d{3}[\s\-.]?\d{4}\b"                            # US/ES 9-digit
+            r"|\b\d{9}\b"                                                        # 9 bare digits (ES)
+            r")"
+        ),
+        "[PHONE]",
+    ),
+
+    # -- PII: password fields -------------------------------------------------
+
+    # Detects explicit password assignments: password=xxx, passwd: xxx, etc.
+    # Does NOT try to detect raw passwords without a field label (impossible w/ regex).
+    _Pattern(
+        EntityType.PASSWORD_FIELD,
+        re.compile(
+            r"(?:password|contraseña|passwd|pwd|pass)\s*[=:]\s*\S+",
+            re.IGNORECASE,
+        ),
+        "[PASSWORD_FIELD]",
     ),
 
     # -- Internal markers (tier-1 blockers) ----------------------------------

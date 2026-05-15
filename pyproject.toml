@@ -4,12 +4,12 @@ version = "0.0.1"
 description = "Open-source coding agent on deepagents. DeepSeek V4 via Nebius EU primary; Claude Haiku/Sonnet escalation."
 readme = "README.md"
 requires-python = ">=3.11"
-license = { text = "AGPL-3.0-only" }
+license = "AGPL-3.0-only"
 authors = [{ name = "jgarcial" }]
 
 dependencies = [
     "deepagents",
-    "langchain-openai",
+    "langchain-deepseek",
     "langchain-anthropic",
     "python-dotenv",
     "pydantic>=2",
@@ -24,7 +24,7 @@ dev = [
 ]
 
 [tool.uv]
-package = false
+package = true
 
 [tool.ruff]
 line-length = 100
@@ -33,6 +33,9 @@ target-version = "py311"
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM"]
 ignore = ["E501"]
+
+[tool.setuptools.packages.find]
+include = ["deep_devops*"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
