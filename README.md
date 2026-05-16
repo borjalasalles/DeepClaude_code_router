@@ -8,9 +8,11 @@ Open-source coding agent built on [`langchain-ai/deepagents`](https://github.com
 
 ## Status
 
-**M1.5 complete (2026-05-15).** The router is live: `deepagents --model deep-devops:router` works end-to-end. PII in your messages is redacted before reaching DeepSeek, and every call is traced to `~/.deep_devops/traces.jsonl`. Tiers 2 (Nebius) and 3 (Anthropic) are designed and logged but not yet wired — all traffic currently routes to tier 1 after redaction. See [`docs/design.md`](docs/design.md) for the architecture and [`docs/session-2026-05-15.md`](docs/session-2026-05-15.md) for the latest hardening notes.
+**M2.1 complete + post-M2.1 hardening (2026-05-16).** The router is live: `deepagents --model deep-devops:router` works end-to-end. PII in your messages is redacted before reaching DeepSeek, and every call is traced to `~/.deep_devops/traces.jsonl`. Tiers 2 (Nebius) and 3 (Anthropic) are designed and logged but **not yet wired** — all traffic currently routes to tier 1 (DeepSeek, China-hosted) after redaction. See [`docs/design.md`](docs/design.md) for the architecture and [`docs/session-2026-05-16-closeout.md`](docs/session-2026-05-16-closeout.md) for the latest decisions.
 
-M1.5 added, on top of M1: international IBAN coverage (~85 countries, ISO 13616, no checksum gate — denial-by-default), Spanish CIF, Mexican CLABE, US ABA routing, US bank account numbers, JSON-Schema exclusion for password fields, explicit fail-closed on scanner errors, and a 4-check observability dashboard at `evals/notebooks/traces_dashboard.ipynb`.
+On top of M1.5, **M2.1** added: a language-aware NER scanner for personal names (spaCy + wordlist supplement, ES + EN models picked per text via `langdetect`), entity aliasing for organisation names, and an output-side name scan that catches names echoed back by the model. **Post-M2.1 hardening (2026-05-16)** moved spaCy and the two language models to *core* dependencies, made the NER layer mandatory (`scan()` raises `NerUnavailableError` and fails closed if the layer cannot load at all — silent fail-open closed), and is documented honestly: see "[What `/model` does — and why you should not use it](#what-model-does--and-why-you-should-not-use-it)" below.
+
+**Strategic note.** Until Tier 2 (Nebius, EU/GDPR) and Tier 3 (Anthropic) are approved and wired, the explicit decision is **not** to over-complexify the DeepSeek-China call. Investment is concentrated in **non-blocking security**: scan, redact, continue. Wordlists and NER logic are iterated from *observed* failures (real edge-cases that leak), not speculatively.
 
 The project is mirrored to GitHub at [`borjalasalles/DeepClaude_code_router`](https://github.com/borjalasalles/DeepClaude_code_router). That remote is the canonical off-machine **backup** — commit and push regularly so work survives a machine loss or migration between computers.
 
@@ -86,23 +88,44 @@ What DeepSeek sees:
 
 ### Known limitations — what the scanner cannot catch
 
-The scanner is **fully deterministic (regex + checksum)**. It has no semantic understanding. These categories are **not protected** today:
+The scanner is **mostly deterministic (regex + checksum)** with a contextual NER layer (M2.1) for personal names. These categories are **not protected** today:
 
-| Gap | Example | Why undetectable | Mitigation |
+| Gap | Example | Why undetectable | Status |
 |---|---|---|---|
-| Proper names in text | `"mi nombre es Juan García"` | Requires NER — no regex can distinguish names from other words | M2: spaCy `es_core_news_sm` |
-| Passwords without a label | `"la clave es Inicial2026!"` | Arbitrary strings are indistinguishable from normal text | M2: NER context + entropy scoring |
+| Proper names in text | `"mi nombre es Juan García"` | Requires NER — no regex can distinguish names from other words | **M2.1 done** — spaCy `es_core_news_sm` + `en_core_web_sm`, language picked per text |
+| Names known only as nicknames | `"me conocen como micky"` | Nicknames live outside any reliable wordlist; spaCy alone doesn't tag them in casual context | Iterated from observed leaks — not speculatively |
+| Sensitive *context* (locations, org references, business situation) | `"oficina de Madrid"`, `"cliente de Banco Santander"`, `"registros médicos VIP"` | Out of scope by design — the scanner targets PII / financial instruments / credentials, not general business context | Cuando Tier 2/3 estén cableados, confidencial irá a EU/Anthropic; mientras tanto, no enviar contexto sensible al TUI |
+| Passwords without a label | `"la clave es Inicial2026!"` | Arbitrary strings are indistinguishable from normal text | M2: entropy scoring |
 | Non-standard field names | `"private_info: secret"`, `"x-api-token: abc"` | Scanner knows a fixed list of field names | Add field names to the pattern |
 | Short / opaque tokens | `"code: 123AXX"` | Too short and generic to regex safely without massive FPs | Accept the gap |
-| Sensitive values inside code blocks | Variable names, inline values in long scripts | The scanner runs on the full message text, but code has too many FPs for broad rules | M2: skip NER on code blocks |
+| Sensitive values inside code blocks | Variable names, inline values in long scripts | NER skips code-fence blocks to avoid FPs on identifiers | **Done** — `_looks_like_code()` skips ```` ``` ```` blocks |
 
 **If you handle data that cannot leave the EU under any circumstances, use the kill-switch:**
 ```bash
 DEEP_DEVOPS_DISABLE_PUBLIC_TIER=1 deepagents --model deep-devops:router
 ```
-This collapses Tier 1 and routes everything to Tier 2 (Nebius, Amsterdam) or Tier 3 (Anthropic). No code change required.
+This collapses Tier 1 and routes everything to Tier 2 (Nebius, Amsterdam) or Tier 3 (Anthropic). No code change required. *(Today Tier 2/3 are not yet wired — the kill-switch is plumbed end-to-end but until Nebius credentials land, setting it effectively refuses traffic rather than rerouting it.)*
 
-For M2, integrating a lightweight NER model (e.g. spaCy `es_core_news_sm`) would add `NOMBRE_PROPIO`, `APELLIDO`, and `ORGANIZACION` detection without LLM overhead.
+### What `/model` does — and why you should not use it
+
+Everything on this page — PII scanning, redaction, NER, tracing, fail-closed on scanner errors — lives **inside `RouterChatModel`**, a custom LangChain chat-model wired into deepagents via `class_path` in `~/.deepagents/config.toml`. The security is a property of *that object*, not of the system.
+
+deepagents ships a `/model` slash-command (and a `--model` flag) that lets any user pick a different model at runtime. When you do `/model openai:gpt-…`, deepagents **does not create another `RouterChatModel`** — it instantiates an entirely different class (`ChatOpenAI`, `ChatAnthropic`, `ChatDeepSeek`, …) built directly by langchain. Our `_route()` is never in its call path, so **scan, redact, tier classification and trace are 100% bypassed**, silently, with no entry in `~/.deep_devops/traces.jsonl`. Our own code cannot even log it: it is not running.
+
+> **The anti-pattern in one line:** security is currently a property of one *object*, not of the *system*. The architectural fix is to migrate the guardrail to a deepagents `AgentMiddleware` (`wrap_model_call`), which runs on every model invocation regardless of which model `/model` selected. That migration is **identified and planned, not done.** See [`docs/session-2026-05-16-closeout.md`](docs/session-2026-05-16-closeout.md) and [`docs/session-2026-05-16-guardrail-middleware.md`](docs/session-2026-05-16-guardrail-middleware.md).
+
+**Until the middleware lands, the only mitigation is process:**
+
+- **Launch with `--model deep-devops:router`.** Do not run `deepagents` without that flag.
+- **Do not use `/model` from the TUI.** If you do, your next message goes directly to whatever provider you picked — very likely outside the EU — unscanned, unredacted, and untraced.
+- If you cannot rely on a process control for your team, either (a) wait for the middleware migration, or (b) wrap the launcher in a script that hard-pins `--model deep-devops:router` and strips the `/model` slash-command from the TUI session before exposing it to users.
+
+This is the most important honest caveat on this page. The rest of the document describes what the router protects when it is in the call path. `/model` takes it out of the call path.
+
+### Other honest caveats (observed in real testing)
+
+- **The model can't tell you whether you passed PII.** If you ask the model *"did I just pass you PII?"*, it answers based on what *it* saw — which is the redacted text, full of placeholders. It will say "no". The truth is the scanner caught your PII *before* the model ever saw it; the model is structurally blind to that. Trust the trace (`~/.deep_devops/traces.jsonl`), not the model's self-report.
+- **The model sometimes treats redacted placeholders as filepaths.** `{/NOMBRE_COMPUESTO_1/}` looks path-like; we have seen the model try `read_file(NOMBRE_COMPUESTO_1)`. Today this is harmless (file not found, no PII inside the placeholder). System-prompt hardening and a non-path-like delimiter are queued; this remained out of scope until observed (per the project's "iterate from real failures" rule).
 
 ## Why
 
@@ -186,9 +209,9 @@ tier1_temperature = 0.0
 **9. Verify and launch:**
 
 ```bash
-uv run pytest                               # expect 167/167
-uv run python -m evals.qa_fase1.run         # QA-MD suite: 38/44 PASS, 6 expected M2 gaps
-deepagents --model deep-devops:router
+uv run pytest                               # expect 220/220
+uv run python -m evals.qa_fase1.run         # QA-MD suite (M1 baseline; M2.1 added on top)
+deepagents --model deep-devops:router       # MUST use this flag — do not use /model from inside the TUI
 ```
 
 To inspect traces locally:
@@ -215,9 +238,11 @@ If `deepagents` is not on your `PATH`, use `"$(uv tool dir)/deepagents-cli/bin/d
 - [`docs/design.md`](docs/design.md) — architecture, decisions, citations
 - [`docs/chapters_notes.md`](docs/chapters_notes.md) — condensed *AI Engineering* findings
 - [`docs/qa-fase1-report.md`](docs/qa-fase1-report.md) — M1 QA baseline against the MD spec
-- [`docs/session-2026-05-15.md`](docs/session-2026-05-15.md) — M1.5 sprint + post-leak hardening (latest)
+- [`docs/session-2026-05-16-closeout.md`](docs/session-2026-05-16-closeout.md) — **latest** — non-blocking security, `/model` deferred-by-process, NER language-aware
+- [`docs/session-2026-05-16.md`](docs/session-2026-05-16.md) — M2.1: NER scanner + entity aliases + output-side name scan
+- [`docs/session-2026-05-15.md`](docs/session-2026-05-15.md) — M1.5: international IBAN + checksum validators
 - [`deepseek_privacidad_api_20260515.md`](deepseek_privacidad_api_20260515.md) — DeepSeek privacy / regulatory research, source spec for the scanner QA suite
-- `docs/<feature>.md` — one note per significant session or feature
+- `docs/<feature>.md` — one note per significant session or feature decision; drafts superseded by a later doc carry `status: superseded` in their frontmatter
 
 ## Licence
 

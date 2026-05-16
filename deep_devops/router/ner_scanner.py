@@ -1,10 +1,25 @@
 """
 NER scanner — detects personal names not covered by regex patterns.
 
-Detection layers (tried in order):
-  1. spaCy es_core_news_sm (optional, lazy-loaded): contextual PER detection.
-  2. Wordlist fallback (always available): INE + international + diminutivos,
-     with normalization (accent/case/misspelling resistant).
+Detection layers:
+  1. spaCy, language-aware (MANDATORY, lazy-loaded): es_core_news_sm for
+     Spanish, en_core_web_sm for English, picked per-text by langdetect.
+     A Spanish model over English code questions mislabels ordinary words
+     ("list") as people — language routing keeps spaCy an *aid* to redaction
+     instead of mangling English (approach 2, 2026-05-16).
+  2. Wordlist supplement: INE + international + diminutivos, with
+     normalization (accent/case/misspelling resistant).
+
+spaCy AIDS redaction — it never blocks the turn. Detected names are redacted
+to placeholders and routed onward (the caller decides routing). NER is a
+tier-1 security control: if the spaCy layer cannot load at all, ``scan()``
+raises ``NerUnavailableError`` instead of silently degrading to wordlist-only
+— a guardrail that disappears without a signal is not a guardrail (Hard Rule
+#8, leak target = 0). That is layer-absence, not a per-query block. The
+wordlist is a *supplement* to spaCy, never a fallback for it. We iterate
+detection logic / wordlists from observed edge-case failures, not
+speculatively. See docs/session-2026-05-16-ner-edgecases.md (P0a/P0b) and
+docs/session-2026-05-16-guardrail-middleware.md.
 
 Both layers:
   - Skip code-fence blocks (``` markers) to avoid FPs on identifiers.
@@ -37,6 +52,15 @@ from deep_devops.data.names import (
 )
 from deep_devops.router.pii_scanner import DetectedEntity, ScanResult
 
+
+class NerUnavailableError(RuntimeError):
+    """The NER security layer (spaCy + es_core_news_sm) failed to load.
+
+    Raised by ``scan()`` instead of silently falling back to wordlist-only.
+    Callers route this through the existing fail-closed path (no upstream
+    call; trace records ``scan_error``).
+    """
+
 # ---------------------------------------------------------------------------
 # Normalisation
 # ---------------------------------------------------------------------------
@@ -60,24 +84,62 @@ _ALL_FIRST_NORM: frozenset[str] = _FIRST_NORM | _DIMI_NORM
 
 
 # ---------------------------------------------------------------------------
-# spaCy — lazy singleton
+# spaCy — language-aware lazy singletons
 # ---------------------------------------------------------------------------
+#
+# A Spanish model run over English code questions tags ordinary words
+# ("list") as PER. Approach 2 (2026-05-16): pick the model by detected
+# language so spaCy *aids* redaction instead of mangling English. Deliberately
+# lean — language detection is a single seeded call; we iterate the logic from
+# observed edge-case failures, not speculatively.
 
-_NLP: object | None = None
+_SPACY_MODELS: dict[str, str] = {"es": "es_core_news_sm", "en": "en_core_web_sm"}
+
+_NLP: dict[str, object] = {}
 _NLP_LOADED = False
+_NLP_ERROR: str | None = None
 
 
-def _load_nlp() -> object | None:
-    global _NLP, _NLP_LOADED
+def _load_nlp() -> dict[str, object] | None:
+    """Lazy singleton. Returns ``{lang: pipeline}``, or None on failure.
+
+    Both models are core deps, so both must load — a simple invariant (no
+    fallback branching). Does NOT raise (so ``is_available()`` can probe
+    safely); the failure reason is captured in ``_NLP_ERROR`` for the
+    message ``scan()`` raises.
+    """
+    global _NLP_LOADED, _NLP_ERROR
     if _NLP_LOADED:
-        return _NLP
+        return _NLP or None
     _NLP_LOADED = True
     try:
         import spacy  # type: ignore[import]
-        _NLP = spacy.load("es_core_news_sm")
+        for lang, model in _SPACY_MODELS.items():
+            _NLP[lang] = spacy.load(model)
+    except Exception as exc:
+        _NLP.clear()
+        _NLP_ERROR = f"{type(exc).__name__}: {exc}"
+    return _NLP or None
+
+
+def _detect_lang(text: str) -> str:
+    """Best-effort guess → 'es' or 'en'.
+
+    Defaults to 'es' (the security-critical language for this EU tool) when
+    text is too short or detection is uncertain: with redaction (not
+    blocking) the cost of over-detection is only over-redaction, while
+    missing a Spanish name is a real leak. langdetect is deterministic with a
+    fixed seed (Cap 3 — deterministic signals, no LLM-judge).
+    """
+    stripped = text.strip()
+    if len(stripped) < 12:
+        return "es"
+    try:
+        from langdetect import DetectorFactory, detect  # type: ignore[import]
+        DetectorFactory.seed = 0
+        return "en" if detect(stripped) == "en" else "es"
     except Exception:
-        _NLP = None
-    return _NLP
+        return "es"
 
 
 # ---------------------------------------------------------------------------
@@ -210,21 +272,34 @@ def _wordlist_scan(text: str, require_context: bool = True) -> list[DetectedEnti
 # spaCy layer
 # ---------------------------------------------------------------------------
 
-def _spacy_scan(text: str) -> list[DetectedEntity]:
-    nlp = _load_nlp()
-    if nlp is None:
-        return []
+# es_core_news_sm labels people "PER"; en_core_web_sm labels them "PERSON".
+# Both must map to NOMBRE_PROPIO — missing "PERSON" would silently leak every
+# English-detected name.
+_PERSON_LABELS = frozenset({"PER", "PERSON"})
 
+
+def _spacy_scan(text: str, nlp: object) -> list[DetectedEntity]:
     doc = nlp(text)  # type: ignore[operator]
     entities: list[DetectedEntity] = []
     for ent in doc.ents:
-        if ent.label_ == "PER":
+        if ent.label_ in _PERSON_LABELS:
+            # spaCy returns a multi-token name ("Miguel Angel", "John Smith")
+            # as ONE span — _merge_compound_names only merges *separate*
+            # adjacent entities, so a single span would never become
+            # NOMBRE_COMPUESTO. Relabel here by token count: ≥2 name tokens
+            # → NOMBRE_COMPUESTO, else NOMBRE_PROPIO. Redaction is identical
+            # either way; this only makes the label match the structure.
+            kind = (
+                "NOMBRE_COMPUESTO"
+                if len(_TOKEN_RE.findall(ent.text)) >= 2
+                else "NOMBRE_PROPIO"
+            )
             entities.append(DetectedEntity(
-                entity_type="NOMBRE_PROPIO",
+                entity_type=kind,
                 value=ent.text,
                 start=ent.start_char,
                 end=ent.end_char,
-                placeholder="[NOMBRE_PROPIO]",
+                placeholder=f"[{kind}]",
             ))
     return entities
 
@@ -256,21 +331,30 @@ def scan(text: str, require_context: bool = True) -> ScanResult:
         scanning where we want to catch any name the model echoed back.
         spaCy is always contextual regardless of this flag.
     """
+    # NER availability is a precondition for routing AT ALL, not per-message:
+    # a broken security layer is the failure, independent of this text.
+    # Fail-closed (raise) instead of silently degrading to wordlist-only.
+    nlp_map = _load_nlp()
+    if nlp_map is None:
+        raise NerUnavailableError(
+            "NER security layer unavailable (spaCy models "
+            f"{sorted(_SPACY_MODELS.values())} failed to load: {_NLP_ERROR}). "
+            "Required tier-1 control — run `uv sync`. Refusing to route to "
+            "avoid leaking PII to tier-1."
+        )
+
     if not text or _looks_like_code(text):
         return ScanResult(detected=False)
 
-    nlp = _load_nlp()
-    if nlp is not None:
-        raw = _spacy_scan(text)
-        # spaCy may miss lowercase / diminutivo tokens — supplement with wordlist
-        wordlist = _wordlist_scan(text, require_context=require_context)
-        # Combine: spaCy spans take priority; add wordlist only where no overlap
-        spacy_spans = {(e.start, e.end) for e in raw}
-        for e in wordlist:
-            if (e.start, e.end) not in spacy_spans:
-                raw.append(e)
-    else:
-        raw = _wordlist_scan(text, require_context=require_context)
+    nlp = nlp_map.get(_detect_lang(text)) or next(iter(nlp_map.values()))
+    raw = _spacy_scan(text, nlp)
+    # spaCy may miss lowercase / diminutivo tokens — supplement with wordlist.
+    wordlist = _wordlist_scan(text, require_context=require_context)
+    # Combine: spaCy spans take priority; add wordlist only where no overlap.
+    spacy_spans = {(e.start, e.end) for e in raw}
+    for e in wordlist:
+        if (e.start, e.end) not in spacy_spans:
+            raw.append(e)
 
     deduped = _dedup(raw)
     # Final compound merge across both sources
@@ -280,5 +364,5 @@ def scan(text: str, require_context: bool = True) -> ScanResult:
 
 
 def is_available() -> bool:
-    """True if spaCy and es_core_news_sm are installed."""
+    """True if spaCy and both language models (es + en) are installed."""
     return _load_nlp() is not None

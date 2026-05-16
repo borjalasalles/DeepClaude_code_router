@@ -3,14 +3,17 @@ RouterChatModel — entry point wired via class_path in ~/.deepagents/config.tom
 
 M1 routing (single tier active):
   - Scan only user-authored (HumanMessage) content for PII/secrets.
-  - If PII found: redact in place with {/TYPE/} placeholders, continue to tier 1.
-  - Session never blocks due to PII — redaction is the mitigation.
+  - If PII found: redact in place with {/TYPE/} placeholders, continue to
+    tier 1. spaCy/NER aids redaction — it never blocks the turn.
+  - Session never blocks due to detected PII — redaction is the mitigation.
   - Tier classification is logged for future routing (tier 2/3 wired in M2).
   - System prompt and AI messages are not scanned (trusted/already processed).
-  - Fail-closed: if the scanner itself raises, the request is aborted before any
-    upstream call — the trace records ``scan_error: true`` and the exception is
-    re-raised so the caller (deepagents) surfaces the error instead of sending
-    unscanned text to the model (QA-D05).
+  - Fail-closed: if the scanner itself raises — including the NER layer being
+    entirely unavailable (NerUnavailableError, see ner_scanner P0b) — the
+    request is aborted before any upstream call; the trace records
+    ``scan_error: true`` and the exception is re-raised so the caller
+    (deepagents) surfaces the error instead of sending unscanned text to the
+    model (QA-D05). This is layer-absence, not a per-query block.
 """
 from __future__ import annotations
 
@@ -197,7 +200,10 @@ class RouterChatModel(BaseChatModel):
         # Step 2 — PII regex scan on aliased text
         scan_result = scan(aliased_text)
 
-        # Step 3 — NER scan (skipped for code-heavy messages)
+        # Step 3 — NER scan. spaCy aids redaction; it does NOT block the turn.
+        # ner_scanner.scan() raises NerUnavailableError only if the layer is
+        # entirely unavailable (caught below as a fail-closed scan_error —
+        # that is layer-absence, not a per-query block).
         ner_result = ner_scanner.scan(aliased_text)
         if ner_result.detected:
             scan_result = _merge_scan_results(scan_result, ner_result, aliased_text)

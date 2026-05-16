@@ -397,6 +397,20 @@ Escalation is **one tier up at a time**; no skips; no bounce back to a lower tie
 
 ## 11. Integration with deepagents CLI (decided 2026-05-14)
 
+> **⚠ Amendment 2026-05-16 — premise invalid w.r.t. `/model`.** The claim below
+> that `RouterChatModel` is "the single entry point" is **false** as soon as
+> the user issues `/model …` (or launches with `--model <other>`): deepagents
+> instantiates a *different* model class entirely (`ChatOpenAI`,
+> `ChatAnthropic`, `ChatDeepSeek`, …), and our `_route()` is never in its
+> call path → scan/redact/tier-routing are silently bypassed. Currently
+> mitigated **by deployment process** ("launch with `--model
+> deep-devops:router`; do not use `/model`"), not technically. The
+> architectural fix — migrate the guardrail to an `AgentMiddleware`
+> (`wrap_model_call`) so it runs for every model invocation regardless of
+> `/model` — is **identified and planned**, not done. See
+> [`session-2026-05-16-closeout.md`](session-2026-05-16-closeout.md) and the
+> README's "What `/model` does" section.
+
 The router plugs into the deepagents CLI via the official `class_path` mechanism in `~/.deepagents/config.toml` — no fork, no sidecar, no extra process.
 
 ```toml

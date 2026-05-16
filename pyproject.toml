@@ -13,6 +13,17 @@ dependencies = [
     "langchain-anthropic",
     "python-dotenv",
     "pydantic>=2",
+    # NER scanner is a tier-1 security control, not optional. Keeping spaCy in
+    # an optional group made a plain `uv sync` silently fail-open to
+    # wordlist-only (violates Hard Rule #8). See
+    # docs/session-2026-05-16-ner-edgecases.md (P0a).
+    # Two language models: es for Spanish (security-critical EU language),
+    # en so a Spanish model doesn't mislabel English code questions as names
+    # (approach 2). langdetect picks the model per-text (deterministic, seeded).
+    "spacy>=3.7",
+    "langdetect>=1.0.9",
+    "es-core-news-sm @ https://github.com/explosion/spacy-models/releases/download/es_core_news_sm-3.8.0/es_core_news_sm-3.8.0-py3-none-any.whl",
+    "en-core-web-sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl",
 ]
 
 [dependency-groups]
@@ -26,10 +37,6 @@ notebook = [
     "pandas>=2",
     "matplotlib>=3.8",
     "jupyter>=1.1",
-]
-ner = [
-    "spacy>=3.7",
-    "es-core-news-sm @ https://github.com/explosion/spacy-models/releases/download/es_core_news_sm-3.8.0/es_core_news_sm-3.8.0-py3-none-any.whl",
 ]
 
 [tool.uv]

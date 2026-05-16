@@ -751,10 +751,14 @@ version = "0.0.1"
 source = { editable = "." }
 dependencies = [
     { name = "deepagents" },
+    { name = "en-core-web-sm" },
+    { name = "es-core-news-sm" },
     { name = "langchain-anthropic" },
     { name = "langchain-deepseek" },
+    { name = "langdetect" },
     { name = "pydantic" },
     { name = "python-dotenv" },
+    { name = "spacy" },
 ]
 
 [package.dev-dependencies]
@@ -763,10 +767,6 @@ dev = [
     { name = "pytest" },
     { name = "pytest-asyncio" },
     { name = "ruff" },
-]
-ner = [
-    { name = "es-core-news-sm" },
-    { name = "spacy" },
 ]
 notebook = [
     { name = "jupyter" },
@@ -777,10 +777,14 @@ notebook = [
 [package.metadata]
 requires-dist = [
     { name = "deepagents" },
+    { name = "en-core-web-sm", url = "https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl" },
+    { name = "es-core-news-sm", url = "https://github.com/explosion/spacy-models/releases/download/es_core_news_sm-3.8.0/es_core_news_sm-3.8.0-py3-none-any.whl" },
     { name = "langchain-anthropic" },
     { name = "langchain-deepseek" },
+    { name = "langdetect", specifier = ">=1.0.9" },
     { name = "pydantic", specifier = ">=2" },
     { name = "python-dotenv" },
+    { name = "spacy", specifier = ">=3.7" },
 ]
 
 [package.metadata.requires-dev]
@@ -789,10 +793,6 @@ dev = [
     { name = "pytest", specifier = ">=8" },
     { name = "pytest-asyncio" },
     { name = "ruff" },
-]
-ner = [
-    { name = "es-core-news-sm", url = "https://github.com/explosion/spacy-models/releases/download/es_core_news_sm-3.8.0/es_core_news_sm-3.8.0-py3-none-any.whl" },
-    { name = "spacy", specifier = ">=3.7" },
 ]
 notebook = [
     { name = "jupyter", specifier = ">=1.1" },
@@ -842,6 +842,14 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/e0/4d/f332313098c1de1b2d2ff91cf2674415cc7cddab2ca1b01ae29774bd5fdf/docstring_parser-0.18.0.tar.gz", hash = "sha256:292510982205c12b1248696f44959db3cdd1740237a968ea1e2e7a900eeb2015", size = 29341, upload-time = "2026-04-14T04:09:19.867Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/a7/5f/ed01f9a3cdffbd5a008556fc7b2a08ddb1cc6ace7effa7340604b1d16699/docstring_parser-0.18.0-py3-none-any.whl", hash = "sha256:b3fcbed555c47d8479be0796ef7e19c2670d428d72e96da63f3a40122860374b", size = 22484, upload-time = "2026-04-14T04:09:18.638Z" },
+]
+
+[[package]]
+name = "en-core-web-sm"
+version = "3.8.0"
+source = { url = "https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl" }
+wheels = [
+    { url = "https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl", hash = "sha256:1932429db727d4bff3deed6b34cfc05df17794f4a52eeb26cf8928f7c1a0fb85" },
 ]
 
 [[package]]
@@ -1708,6 +1716,15 @@ sdist = { url = "https://files.pythonhosted.org/packages/4f/24/9777489d6fbbee64a
 wheels = [
     { url = "https://files.pythonhosted.org/packages/1d/7a/9c97a7b9cbe4c5dc6a44cdb1545450c28f0c8ce89b9c1f0ee7fbad896263/langchain_protocol-0.0.15-py3-none-any.whl", hash = "sha256:461eb794358f83d5e42635a5797799ffec7b4702314e34edf73ac21e75d3ef79", size = 6982, upload-time = "2026-05-01T22:30:03.877Z" },
 ]
+
+[[package]]
+name = "langdetect"
+version = "1.0.9"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "six" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/0e/72/a3add0e4eec4eb9e2569554f7c70f4a3c27712f40e3284d483e88094cc0e/langdetect-1.0.9.tar.gz", hash = "sha256:cbc1fef89f8d062739774bd51eda3da3274006b3661d199c2655f6b3f6d605a0", size = 981474, upload-time = "2021-05-07T07:54:13.562Z" }
 
 [[package]]
 name = "langgraph"
