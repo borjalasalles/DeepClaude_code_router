@@ -32,7 +32,9 @@ from langchain_core.tools import BaseTool
 from langchain_core.utils.function_calling import convert_to_openai_tool
 
 from deep_devops.gateway.tier1 import build_tier1_client
-from deep_devops.router.pii_scanner import scan
+from deep_devops.router import entity_aliases, ner_scanner
+from deep_devops.router.entity_aliases import AliasContext
+from deep_devops.router.pii_scanner import ScanResult, scan
 from deep_devops.router.redaction import RedactionContext, redact
 
 load_dotenv()
@@ -85,6 +87,39 @@ def _redact_messages(
         else:
             out.append(m)
     return out
+
+
+def _apply_alias_to_messages(
+    messages: list[BaseMessage],
+) -> list[BaseMessage]:
+    """Apply entity alias substitution to HumanMessages in place (new list)."""
+    out: list[BaseMessage] = []
+    for m in messages:
+        if isinstance(m, HumanMessage) and isinstance(m.content, str):
+            out.append(HumanMessage(content=entity_aliases.apply(m.content).aliased_text))
+        else:
+            out.append(m)
+    return out
+
+
+def _merge_scan_results(
+    pii: ScanResult, ner: ScanResult, text: str
+) -> ScanResult:
+    """Merge NER entities into PII result, dropping spans that overlap PII."""
+    if not ner.detected:
+        return pii
+    pii_spans = [(e.start, e.end) for e in pii.entities]
+
+    def _overlaps(s: int, e: int) -> bool:
+        return any(ps <= s < pe or ps < e <= pe or (s <= ps and e >= pe)
+                   for ps, pe in pii_spans)
+
+    merged = list(pii.entities)
+    for ent in ner.entities:
+        if not _overlaps(ent.start, ent.end):
+            merged.append(ent)
+    merged.sort(key=lambda e: e.start)
+    return ScanResult(detected=bool(merged), entities=merged)
 
 
 def _is_public(text: str) -> bool:
@@ -141,22 +176,40 @@ class RouterChatModel(BaseChatModel):
     # Core routing — returns (redacted_messages, trace_meta)
     # ------------------------------------------------------------------
 
-    def _route(self, messages: list[BaseMessage]) -> tuple[list[BaseMessage], dict[str, Any]]:
-        """Scan HumanMessages, redact PII, classify intended tier for logging.
+    def _route(
+        self, messages: list[BaseMessage]
+    ) -> tuple[list[BaseMessage], dict[str, Any], AliasContext]:
+        """Scan HumanMessages, apply aliases + NER + PII redaction, classify tier.
 
-        Raises on scanner failure. Callers (``_generate``/``_stream``/``_agenerate``)
-        wrap this in a fail-closed try/except that records a ``scan_error`` trace
-        and aborts the upstream call (QA-D05).
+        Raises on scanner failure. Callers wrap this in a fail-closed try/except
+        that records a ``scan_error`` trace (QA-D05).
+
+        Returns (active_messages, meta, alias_ctx). The caller must call
+        alias_ctx.restore() on the model output to surface original names.
         """
         user_text = _human_text(messages)
-        scan_result = scan(user_text)
-        ctx = redact(user_text, scan_result)
+
+        # Step 1 — entity aliases (tier 1 + 2): org names → sector descriptors
+        alias_ctx = entity_aliases.apply(user_text)
+        aliased_text = alias_ctx.aliased_text
+        alias_applied = bool(alias_ctx.reverse_map)
+
+        # Step 2 — PII regex scan on aliased text
+        scan_result = scan(aliased_text)
+
+        # Step 3 — NER scan (skipped for code-heavy messages)
+        ner_result = ner_scanner.scan(aliased_text)
+        if ner_result.detected:
+            scan_result = _merge_scan_results(scan_result, ner_result, aliased_text)
+
+        ctx = redact(aliased_text, scan_result)
 
         pii_clean = not scan_result.detected
         redacted_fields = scan_result.entity_types() if scan_result.detected else []
 
-        # Build redacted message list (no-op when no PII)
-        active_messages = _redact_messages(messages, ctx) if scan_result.detected else messages
+        # Build message list: apply aliases first, then PII placeholders
+        aliased_messages = _apply_alias_to_messages(messages) if alias_applied else messages
+        active_messages = _redact_messages(aliased_messages, ctx) if scan_result.detected else aliased_messages
 
         # Classify intended tier for the trace log (tier 2/3 not wired yet)
         kill_switch = os.environ.get(_KILL_SWITCH_ENV, "").strip() == "1"
@@ -190,13 +243,16 @@ class RouterChatModel(BaseChatModel):
             "prompt_hash": prompt_hash,
             "prompt_chars": prompt_chars,
             "scan_error": False,
+            "alias_applied": alias_applied,
+            "alias_count": len(alias_ctx.reverse_map),
+            "ner_entity_types": ner_result.entity_types() if ner_result.detected else [],
             # Original values from the input PII — used by the output-side scan
             # to distinguish a legitimate placeholder restoration from a real
             # output leak. The model itself only ever sees the redacted form,
             # so in practice this set is mostly defensive.
             "input_pii_values": frozenset(ctx.reverse_map.values()),
         }
-        return active_messages, meta
+        return active_messages, meta, alias_ctx
 
     # ------------------------------------------------------------------
     # Output-side PII scan (2026-05-15 edge-case hardening)
@@ -205,28 +261,24 @@ class RouterChatModel(BaseChatModel):
     def _scan_output(
         self, text: str, allowed_values: frozenset[str]
     ) -> tuple[str, list[str]]:
-        """Redact PII detected in *model output*.
+        """Redact PII and NER-detected names in *model output*.
 
-        The model only ever sees redacted input, so any IBAN/CLABE/account-
-        shaped string in its output is one of:
-          1. A placeholder token like ``{/IBAN_CODE_1/}`` — never matches a PII
-             pattern (the regex needs a real country code + length), so
-             ignored automatically.
-          2. A value the model hallucinated or recalled from training data —
-             treat as a leak, redact and log.
-          3. (Defensive) An echo of an original PII value that somehow round-
-             tripped — ``allowed_values`` exempts these from the leak count
-             but still redacts them in the output so the user can't read them.
+        Runs both regex PII scan and NER (require_context=False) so that
+        names echoed back by the model (e.g. "Te llamas Miguel") are caught
+        even when the input was already redacted.
 
-        Returns ``(cleaned_text, leak_types)`` where ``leak_types`` lists
-        entity types of *real* leaks (case 2). Case 3 redacts silently.
+        Returns ``(cleaned_text, leak_types)``.
         """
-        result = scan(text)
-        if not result.detected:
+        pii_result = scan(text)
+        ner_result = ner_scanner.scan(text, require_context=False)
+        merged = _merge_scan_results(pii_result, ner_result, text)
+
+        if not merged.detected:
             return text, []
+
         leaks: list[str] = []
         cleaned = text
-        for entity in sorted(result.entities, key=lambda e: e.start, reverse=True):
+        for entity in sorted(merged.entities, key=lambda e: e.start, reverse=True):
             redaction_token = f"[OUTPUT_REDACTED_{entity.entity_type}]"
             cleaned = cleaned[: entity.start] + redaction_token + cleaned[entity.end :]
             if entity.value not in allowed_values:
@@ -250,6 +302,18 @@ class RouterChatModel(BaseChatModel):
                 gen.text = cleaned
             all_leaks.extend(leaks)
         return all_leaks
+
+    def _apply_alias_restore(self, result: ChatResult, alias_ctx: AliasContext) -> None:
+        """Restore organisation aliases in model output (in-place)."""
+        if not alias_ctx.reverse_map:
+            return
+        for gen in result.generations:
+            msg = getattr(gen, "message", None)
+            if msg is not None and isinstance(msg.content, str):
+                restored = alias_ctx.restore(msg.content)
+                if restored != msg.content:
+                    msg.content = restored
+                    gen.text = restored
 
     def _scan_error_meta(self, exc: BaseException, user_text: str) -> dict[str, Any]:
         """Trace metadata for a scanner failure — used by fail-closed paths.
@@ -287,7 +351,7 @@ class RouterChatModel(BaseChatModel):
         ts_start = datetime.now(timezone.utc).isoformat()
 
         try:
-            active_messages, meta = self._route(messages)
+            active_messages, meta, alias_ctx = self._route(messages)
         except Exception as exc:
             err_meta = self._scan_error_meta(exc, _human_text(messages))
             self._write_trace(trace_id, span_id, ts_start, err_meta)
@@ -301,6 +365,7 @@ class RouterChatModel(BaseChatModel):
         elapsed_ms = (time.perf_counter() - t0) * 1000
 
         output_leaks = self._apply_output_scan(result, meta["input_pii_values"])
+        self._apply_alias_restore(result, alias_ctx)
 
         usage = result.llm_output or {}
         self._write_trace(trace_id, span_id, ts_start, meta,
@@ -326,7 +391,7 @@ class RouterChatModel(BaseChatModel):
         ts_start = datetime.now(timezone.utc).isoformat()
 
         try:
-            active_messages, meta = self._route(messages)
+            active_messages, meta, alias_ctx = self._route(messages)
         except Exception as exc:
             err_meta = self._scan_error_meta(exc, _human_text(messages))
             self._write_trace(trace_id, span_id, ts_start, err_meta)
@@ -334,10 +399,8 @@ class RouterChatModel(BaseChatModel):
 
         import time
         t0 = time.perf_counter()
-        # Streaming output cannot be rewritten after the fact (chunks have
-        # already been forwarded to the user), so the leak detection here is
-        # post-mortem logging only. The trace flags ``output_leaks`` so
-        # operations can investigate; no in-flight mitigation.
+        # Streaming: chunks already forwarded to user — alias restore and leak
+        # detection are post-mortem logging only (no in-flight rewrite).
         buffer_parts: list[str] = []
         for chunk in self._tier1._stream(active_messages, stop=stop, run_manager=run_manager, **kwargs):
             content = getattr(chunk.message, "content", None) if getattr(chunk, "message", None) else None
@@ -367,7 +430,7 @@ class RouterChatModel(BaseChatModel):
         ts_start = datetime.now(timezone.utc).isoformat()
 
         try:
-            active_messages, meta = self._route(messages)
+            active_messages, meta, alias_ctx = self._route(messages)
         except Exception as exc:
             err_meta = self._scan_error_meta(exc, _human_text(messages))
             self._write_trace(trace_id, span_id, ts_start, err_meta)
@@ -381,6 +444,7 @@ class RouterChatModel(BaseChatModel):
         elapsed_ms = (time.perf_counter() - t0) * 1000
 
         output_leaks = self._apply_output_scan(result, meta["input_pii_values"])
+        self._apply_alias_restore(result, alias_ctx)
 
         usage = result.llm_output or {}
         self._write_trace(trace_id, span_id, ts_start, meta,
@@ -421,6 +485,9 @@ class RouterChatModel(BaseChatModel):
             "pii_clean": meta["pii_clean"],
             "redacted_fields": meta["redacted_fields"],
             "redacted_fields_count": meta["redacted_fields_count"],
+            "alias_applied": meta.get("alias_applied", False),
+            "alias_count": meta.get("alias_count", 0),
+            "ner_entity_types": meta.get("ner_entity_types", []),
             "scan_error": meta.get("scan_error", False),
             "input_tokens": input_tokens,
             "output_tokens": output_tokens,

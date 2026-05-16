@@ -126,7 +126,7 @@ def test_route_system_prompt_with_env_does_not_trigger_pii(
         SystemMessage(content="You can read_file, write_file, edit .env files."),
         HumanMessage(content="hola"),
     ]
-    active, meta = router._route(msgs)
+    active, meta, alias_ctx = router._route(msgs)
     assert meta["pii_clean"] is True
     assert meta["route"] == "public"
 
@@ -137,7 +137,7 @@ def test_route_email_in_user_message_redacts_and_continues(
     monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test-" + "x" * 20)
     router = _make_router()
     msgs = [HumanMessage(content="my email is user@company.com")]
-    active, meta = router._route(msgs)
+    active, meta, alias_ctx = router._route(msgs)
     assert meta["pii_clean"] is False
     assert "EMAIL" in meta["classifier_reason"]
     assert meta["actual_tier"] == 1  # still routes to tier 1 after redaction
@@ -151,7 +151,7 @@ def test_route_aws_key_redacts_and_continues(
     monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test-" + "x" * 20)
     router = _make_router()
     msgs = [HumanMessage(content="my key AKIAIOSFODNN7EXAMPLE is leaking")]
-    active, meta = router._route(msgs)
+    active, meta, alias_ctx = router._route(msgs)
     assert meta["pii_clean"] is False
     assert meta["actual_tier"] == 1
     assert "AKIAIOSFODNN7EXAMPLE" not in active[0].content
@@ -162,7 +162,7 @@ def test_route_clean_public_query(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("DEEP_DEVOPS_DISABLE_PUBLIC_TIER", raising=False)
     router = _make_router()
     msgs = [HumanMessage(content="how do I sort a list in Python?")]
-    _, meta = router._route(msgs)
+    _, meta, __ = router._route(msgs)
     assert meta["pii_clean"] is True
     assert meta["route"] == "public"
     assert meta["actual_tier"] == 1
@@ -174,7 +174,7 @@ def test_route_kill_switch_marks_intended_tier2(monkeypatch: pytest.MonkeyPatch)
     monkeypatch.setenv("DEEP_DEVOPS_DISABLE_PUBLIC_TIER", "1")
     router = _make_router()
     msgs = [HumanMessage(content="how do I sort a list?")]
-    _, meta = router._route(msgs)
+    _, meta, __ = router._route(msgs)
     assert meta["intended_tier"] == 2
     assert meta["actual_tier"] == 1  # still goes to tier 1 for M1
 

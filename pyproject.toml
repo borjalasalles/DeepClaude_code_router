@@ -27,6 +27,10 @@ notebook = [
     "matplotlib>=3.8",
     "jupyter>=1.1",
 ]
+ner = [
+    "spacy>=3.7",
+    "es-core-news-sm @ https://github.com/explosion/spacy-models/releases/download/es_core_news_sm-3.8.0/es_core_news_sm-3.8.0-py3-none-any.whl",
+]
 
 [tool.uv]
 package = true
