@@ -65,10 +65,19 @@ ai_engineering/  book PDFs (reference)
 - `docs/design.md` is the living architecture doc; new session notes link to it, not duplicate it.
 - Session logs use the filename `docs/session-YYYY-MM-DD.md` (or `-topic` suffix when multiple sessions land same day).
 
-## Common commands (when implemented)
+## Common commands
 
 ```bash
-uv sync                          # install deps
+# Primera instalación en una máquina nueva
+bash setup.sh                    # instala uv, deepagents CLI, deep_devops y el comando `deep`
+deep                             # lanza el agente (tras setup.sh)
+
+# Desarrollo
+uv sync                          # instala/actualiza deps
+uv run pytest                    # suite de tests
+uv run python -m evals.qa_fase1.run  # QA suite
+
+# Cuando estén implementados
 uv run dd                        # launch deepagents TUI with our router/skills
 uv run eval                      # run eval harness over evals/tasks.jsonl
 uv run skill-factory --dry-run   # offline batch: cluster failures, propose skills

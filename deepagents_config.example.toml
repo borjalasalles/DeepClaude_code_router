@@ -1,0 +1,13 @@
+# ~/.deepagents/config.toml — copy this file to that path.
+#
+# IMPORTANT: the [models.providers.*] nesting is required — deepagents reads
+# providers from data["models"]["providers"], not from data["providers"].
+# Using [providers.*] silently ignores the custom class_path.
+
+[models]
+default = "deep_devops:router"
+recent  = "deep_devops:router"
+
+[models.providers.deep_devops]
+class_path = "deep_devops.router.model:RouterChatModel"
+models     = ["router"]
