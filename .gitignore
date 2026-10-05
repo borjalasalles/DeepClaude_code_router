@@ -22,8 +22,9 @@ build/
 .idea/
 .DS_Store
 
-# Claude Code local settings
-.claude/settings.local.json
+# Claude Code: contexto local del agente, no es contenido del proyecto
+CLAUDE.md
+.claude/
 
 # Eval outputs & traces
 evals/runs/
