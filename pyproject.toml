@@ -1,10 +1,10 @@
 [project]
 name = "deep-devops"
 version = "0.0.1"
-description = "Open-source coding agent on deepagents. DeepSeek V4 via Nebius EU primary; Claude Haiku/Sonnet escalation."
+description = "Source-available (noncommercial) coding agent on deepagents. DeepSeek V4 via Nebius EU primary; Claude Haiku/Sonnet escalation."
 readme = "README.md"
 requires-python = ">=3.11"
-license = "AGPL-3.0-only"
+license = "PolyForm-Noncommercial-1.0.0"
 authors = [{ name = "jgarcial" }]
 
 dependencies = [

@@ -1,6 +1,6 @@
 # deep-devops
 
-Open-source coding agent built on [`langchain-ai/deepagents`](https://github.com/langchain-ai/deepagents). **Three-tier routing:**
+Source-available coding agent built on [`langchain-ai/deepagents`](https://github.com/langchain-ai/deepagents). **Three-tier routing:**
 
 1. **DeepSeek native API** (cheapest, China-hosted) — for public, non-company queries with no PII. Gated by a PII scanner + a publicness classifier (whitelist semantics) and an env kill-switch.
 2. **DeepSeek V4 via Nebius** (Amsterdam, EU/GDPR) — default for internal traffic.
@@ -246,4 +246,8 @@ If `deepagents` is not on your `PATH`, use `"$(uv tool dir)/deepagents-cli/bin/d
 
 ## Licence
 
-[GNU AGPL-3.0-only](LICENSE). deep-devops only *depends on* `deepagents` (MIT) — it does not bundle or redistribute it — so this project is free to adopt a copyleft licence. The AGPL's network clause means anyone who runs a modified version as a service must publish their changes.
+[PolyForm Noncommercial License 1.0.0](LICENSE). The source is public: read it, run it, modify it, fork it — for any **noncommercial** purpose, including personal study, research, teaching and hobby projects. **Commercial use of any kind is not granted** by this licence; ask first.
+
+This is a *source-available* licence, not an OSI-approved open-source one — the noncommercial restriction is exactly what disqualifies it. deep-devops only *depends on* `deepagents` (MIT) and does not bundle or redistribute it, so its licence is free to differ.
+
+Releases up to and including commit `153ebbe` were published under GNU AGPL-3.0-only. That grant cannot be revoked: anyone who obtained those versions keeps their AGPL rights to them. This licence applies from the commit that introduced it onwards.
